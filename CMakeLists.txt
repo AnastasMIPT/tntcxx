@@ -15,6 +15,8 @@ ADD_COMPILE_OPTIONS(-Wall -Wextra -Werror)
 INCLUDE_DIRECTORIES(.)
 INCLUDE_DIRECTORIES(./src)
 ADD_EXECUTABLE(MempoolUnitTest.test src/Utils/Mempool.hpp test/MempoolUnitTest.cpp)
+ADD_EXECUTABLE(BufferUnit.test src/Buffer/Buffer.hpp test/BufferUnitTest.cpp)
 
 ENABLE_TESTING()
 ADD_TEST(NAME MempoolUnitTest.test COMMAND MempoolUnitTest.test)
+ADD_TEST(NAME BufferUnit.test COMMAND BufferUnit.test)

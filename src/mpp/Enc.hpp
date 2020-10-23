@@ -53,6 +53,7 @@ class Enc
 	using iterator_t = typename BUFFER::iterator;
 
 public:
+	using iterator = iterator_t;
 	struct range
 	{
 		iterator_t first, second;

@@ -53,6 +53,7 @@ class Enc
 	using iterator_t = typename BUFFER::iterator;
 
 public:
+	using iterator = iterator_t;
 	struct range
 	{
 		iterator_t first, second;
@@ -65,6 +66,9 @@ public:
 	};
 
 	explicit Enc(Buffer_t& buf) : m_Buf(buf) {}
+
+
+	BUFFER& getBuf() { return m_Buf; }
 
 	template <class... T>
 	void add(const T&... t)
@@ -497,7 +501,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		m_Buf.addBack(prefix);
 		m_Buf.advanceBack(t.value);
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
-	} else if constexpr (std::is_same_v<T, nullptr_t>) {
+	} else if constexpr (std::is_same_v<T, std::nullptr_t>) {
 		constexpr auto add = CStr<'\xc0'>{};
 		add_internal<compact::MP_END, false, void>(prefix.join(add), more...);
 	} else if constexpr (std::is_same_v<T, bool>) {

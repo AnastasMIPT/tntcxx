@@ -38,39 +38,23 @@
 #include <cstring>
 #include <type_traits>
 
+#include "../Utils/Mempool.hpp"
 #include "../Utils/rlist.h"
 
 namespace tnt {
 
 /**
- * Very basic allocator, wrapper around new/delete with fixed API.
- */
-template <size_t N>
-class DefaultAllocator
-{
-public:
-	/*
-	 * TODO: avoid releasing blocks but keep them for further
-	 * allocations instead.
-	 */
-	static char *alloc() { return new char [N]; }
-	static void free(char *ptr) { delete [] ptr; }
-	/** Malloc requires no *visible* memory overhead. */
-	static constexpr size_t REAL_SIZE = N;
-};
-
-/**
  * Exception safe C++ IO buffer.
  *
  * Allocator requirements (API):
- * alloc() - static allocation method, must throw an exception in case it fails.
+ * allocate() - static allocation method, must throw an exception in case it fails.
  * Returns chunk of memory of @REAL_SIZE size (which is less or equal to N).
- * free() - static release method, takes pointer to memory allocated by @alloc
- * and frees it. Must not throw an exception.
+ * deallocate() - static release method, takes a pointer to memory allocated
+ * by @allocate and frees it. Must not throw an exception.
  * REAL_SIZE - constant determines real size of allocated chunk (excluding
  * overhead taken by allocator).
  */
-template <size_t N, class allocator = DefaultAllocator<N>>
+template <size_t N = 16 * 1024, class allocator = MempoolStatic<N>>
 class Buffer
 {
 private:
@@ -87,15 +71,16 @@ private:
 	protected:
 		/** Prevent base class from being instantiated. */
 		BlockBase() {};
-		BlockBase(BlockBase &other) { (void) other; };
+		BlockBase(BlockBase &) = delete;
+		BlockBase& operator=(BlockBase &) = delete;
 		~BlockBase() {};
 	};
 	struct Block : BlockBase
 	{
-		static constexpr size_t BLOCK_DATA_SIZE =
+		static constexpr size_t DATA_SIZE =
 			allocator::REAL_SIZE - sizeof(BlockBase);
-		static_assert(BLOCK_DATA_SIZE > 0,
-			      "Block data size is expected to be positive value");
+		static_assert(allocator::REAL_SIZE > sizeof(BlockBase),
+			      "Allocation size must be more that 16 bytes");
 		static_assert(allocator::REAL_SIZE % alignof(BlockBase) == 0,
 			      "Allocation size must be multiple of 16 bytes");
 		/**
@@ -103,21 +88,21 @@ private:
 		 * of available memory to keep the data is less than allocator
 		 * provides.
 		 */
-		char data[BLOCK_DATA_SIZE];
+		char data[DATA_SIZE];
 
 		void* operator new(size_t size)
 		{
 			assert(size >= sizeof(Block));
 			(void)size;
-			return allocator::alloc();
+			return allocator::allocate();
 		}
 		void operator delete(void *ptr)
 		{
-			allocator::free((char *)ptr);
+			allocator::deallocate((char *)ptr);
 		}
 
 		char  *begin() { return data; }
-		char  *end()   { return data + BLOCK_DATA_SIZE; }
+		char  *end()   { return data + DATA_SIZE; }
 		Block *prev()  { return rlist_prev_entry(this, in_blocks); }
 		Block *next()  { return rlist_next_entry(this, in_blocks); }
 	};
@@ -202,15 +187,19 @@ public:
 		iterator& operator ++ ()
 		{
 			moveForward(1);
-			adjustPosition();
+			adjustPositionForward();
 			return *this;
 		}
 		iterator& operator += (size_t step)
 		{
 			moveForward(step);
 			/* Adjust iterator's position in the list of iterators. */
-			adjustPosition();
+			adjustPositionForward();
 			return *this;
+		}
+		char operator * () const
+		{
+			return *m_position;
 		}
 		friend bool operator == (const iterator &a, const iterator &b)
 		{
@@ -225,11 +214,13 @@ public:
 		friend bool operator < (const iterator &a, const iterator &b)
 		{
 			assert(&a.m_buffer == &b.m_buffer);
-			if (a.m_block->id < b.m_block->id)
-				return true;
-			if (a.m_block->id > b.m_block->id)
-				return false;
-			return a.m_position < b.m_position;
+			return std::tie(a.m_block->id, a.m_position) <
+			       std::tie(b.m_block->id, b.m_position);
+		}
+		/** Remove from linked list of iterators. */
+		void unlink()
+		{
+			rlist_del_entry(this, in_iters);
 		}
 		~iterator()
 		{
@@ -246,20 +237,18 @@ public:
 			return this == rlist_last_entry(&m_buffer.m_iterators,
 							iterator, in_iters);
 		}
-		/** Adjust iterator's position in the list of iterators. */
-		void adjustPosition()
+		/** Adjust iterator's position in list of iterators after
+		 * moveForward. */
+		void adjustPositionForward()
 		{
-			if (isLast())
+			if (isLast() || !(*next() < *this))
 				return;
 			iterator *itr = next();
+			while (!itr->isLast() && *itr->next() < *this)
+				itr = itr->next();
+			// TODO: avoid excess instructions in rlist_del.
 			rlist_del(&in_iters);
-			for (; *this < *itr; itr = itr->next()) {
-				if (itr->isLast()) {
-					rlist_add(&itr->in_iters, &in_iters);
-					return;
-				}
-			}
-			rlist_add_tail(&itr->in_iters, &in_iters);
+			rlist_add(&itr->in_iters, &in_iters);
 		}
 		void moveForward(size_t step)
 		{
@@ -356,9 +345,16 @@ public:
 	 * Copy content of data iterator pointing to to the buffer @a buf of
 	 * size @a size.
 	 */
-	void get(iterator itr, char *buf, size_t size);
+	void get(const iterator& itr, char *buf, size_t size);
 	template <class T>
-	void get(iterator itr, T& t);
+	void get(const iterator& itr, T& t);
+	template <class T>
+	T get(const iterator& itr);
+
+	/**
+	 * Determine whether the buffer has @a size bytes after @ itr.
+	 */
+	bool has(const iterator& itr, size_t size);
 
 	/**
 	 * Move content of buffer starting from position @a itr pointing to
@@ -454,7 +450,7 @@ Buffer<N, allocator>::appendBack(size_t size)
 		Block *b = newBlock(&new_blocks);
 		new_end = b->begin();
 		size -= left_in_block;
-		left_in_block = Block::BLOCK_DATA_SIZE;
+		left_in_block = Block::DATA_SIZE;
 	}
 	size_t last_id =  block == nullptr ? 0 : block->id;
 	Block *tmp;
@@ -498,7 +494,7 @@ Buffer<N, allocator>::dropBack(size_t size)
 #endif
 		m_end = block->end();
 		size -= left_in_block;
-		left_in_block = Block::BLOCK_DATA_SIZE;
+		left_in_block = Block::DATA_SIZE;
 	}
 	m_end = m_end - size;
 #ifndef NDEBUG
@@ -539,7 +535,7 @@ Buffer<N, allocator>::dropFront(size_t size)
 		block = delBlockAndNext(block);
 		m_begin = block->begin();
 		size -= left_in_block;
-		left_in_block = Block::BLOCK_DATA_SIZE;
+		left_in_block = Block::DATA_SIZE;
 	}
 	m_begin += size;
 #ifndef NDEBUG
@@ -568,7 +564,7 @@ template <class T>
 size_t
 Buffer<N, allocator>::addBack(T&& t)
 {
-	static_assert(std::is_standard_layout<typename std::remove_reference<T>::type>::value,
+	static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>,
 		      "T is expected to have standard layout");
 	// TODO: optimization: rewrite without iterators.
 	iterator itr = appendBack(sizeof(T));
@@ -628,7 +624,7 @@ Buffer<N, allocator>::insert(const iterator &itr, size_t size)
 			left_in_src_block -= copy_chunk_sz;
 			dst_block = dst_block->prev();
 			dst = dst_block->end() - left_in_src_block;
-			left_in_dst_block = Block::BLOCK_DATA_SIZE;
+			left_in_dst_block = Block::DATA_SIZE;
 			src = src_block->begin();
 			copy_chunk_sz = left_in_src_block;
 		}
@@ -691,7 +687,7 @@ Buffer<N, allocator>::release(const iterator &itr, size_t size)
 				break;
 			src_block = src_block->next();
 			src = src_block->begin();
-			left_in_src_block = Block::BLOCK_DATA_SIZE;
+			left_in_src_block = Block::DATA_SIZE;
 			dst += copy_chunk_sz;
 			copy_chunk_sz = left_in_dst_block;
 		} else {
@@ -699,7 +695,7 @@ Buffer<N, allocator>::release(const iterator &itr, size_t size)
 			left_in_src_block -= copy_chunk_sz;
 			dst_block = dst_block->next();
 			dst = dst_block->begin();
-			left_in_dst_block = Block::BLOCK_DATA_SIZE;
+			left_in_dst_block = Block::DATA_SIZE;
 			src += copy_chunk_sz;
 			copy_chunk_sz = left_in_src_block;
 		}
@@ -772,7 +768,7 @@ Buffer<N, allocator>::set(const iterator &itr, const char *buf, size_t size)
 		buf_pos += copy_sz;
 		block = rlist_next_entry(block, in_blocks);
 		pos = (char *)&block->data;
-		left_in_block = Block::BLOCK_DATA_SIZE;
+		left_in_block = Block::DATA_SIZE;
 	}
 }
 
@@ -785,18 +781,19 @@ Buffer<N, allocator>::set(const iterator &itr, T&& t)
 	 * Do not even attempt at copying non-standard classes (such as
 	 * containing vtabs).
 	 */
-	static_assert(std::is_standard_layout<T>::value,
+	static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>,
 		      "T is expected to have standard layout");
 	size_t t_size = sizeof(t);
+	const char *tc = &reinterpret_cast<const char &>(t);
 	if (t_size <= (size_t)(itr.m_block->end() - itr.m_position))
-		new(itr.m_position) T(t);
+		memcpy(itr.m_position, tc, sizeof(t));
 	else
-		set(itr, reinterpret_cast<char *>(&t), t_size);
+		set(itr, tc, t_size);
 }
 
 template <size_t N, class allocator>
 void
-Buffer<N, allocator>::get(iterator itr, char *buf, size_t size)
+Buffer<N, allocator>::get(const iterator& itr, char *buf, size_t size)
 {
 	/*
 	 * The same implementation as in ::set() method buf vice versa:
@@ -812,16 +809,16 @@ Buffer<N, allocator>::get(iterator itr, char *buf, size_t size)
 		buf += copy_sz;
 		block = rlist_next_entry(block, in_blocks);
 		pos = &block->data[0];
-		left_in_block = Block::BLOCK_DATA_SIZE;
+		left_in_block = Block::DATA_SIZE;
 	}
 }
 
 template <size_t N, class allocator>
 template <class T>
 void
-Buffer<N, allocator>::get(iterator itr, T& t)
+Buffer<N, allocator>::get(const iterator& itr, T& t)
 {
-	static_assert(std::is_standard_layout<T>::value,
+	static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>,
 		      "T is expected to have standard layout");
 	size_t t_size = sizeof(t);
 	if (t_size <= (size_t)(itr.m_block->end() - itr.m_position)) {
@@ -829,6 +826,41 @@ Buffer<N, allocator>::get(iterator itr, T& t)
 	} else {
 		get(itr, reinterpret_cast<char *>(&t), t_size);
 	}
+}
+
+template <size_t N, class allocator>
+template <class T>
+T
+Buffer<N, allocator>::get(const iterator& itr)
+{
+	static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>,
+		      "T is expected to have standard layout");
+	T t;
+	get(itr, t);
+	return t;
+}
+
+template <size_t N, class allocator>
+bool
+Buffer<N, allocator>::has(const iterator& itr, size_t size)
+{
+	struct Block *block = itr.m_block;
+	struct Block *last_block = lastBlock();
+	if (block != last_block) {
+		size_t have = itr.m_block->end() - itr.m_position;
+		if (size <= have)
+			return true;
+		size -= have;
+		block = rlist_next_entry(block, in_blocks);
+	}
+	while (block != last_block) {
+		if (size <= Block::DATA_SIZE)
+			return true;
+		size -= Block::DATA_SIZE;
+		block = rlist_next_entry(block, in_blocks);
+	}
+	size_t have = m_end - block->data;
+	return size <= have;
 }
 
 template <size_t N, class allocator>

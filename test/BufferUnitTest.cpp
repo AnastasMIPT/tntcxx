@@ -54,7 +54,7 @@ static void
 fillBuffer(tnt::Buffer<N> &buffer, size_t size)
 {
 	for (size_t i = 0; i < size; ++i)
-		buffer.template addBack<char>(std::move(char_samples[i % SAMPLES_CNT]));
+		buffer.addBack(char_samples[i % SAMPLES_CNT]);
 }
 
 template<size_t N>
@@ -114,14 +114,14 @@ buffer_basic()
 	TEST_INIT();
 	tnt::Buffer<N> buf;
 	fail_unless(buf.empty());
-	size_t sz = buf.template addBack<int>(std::move(int_sample));
+	size_t sz = buf.addBack(int_sample);
 	fail_unless(! buf.empty());
 	fail_unless(sz == sizeof(int));
 	auto itr = buf.begin();
 	int int_res = -1;
-	buf.template get<int>(itr, int_res);
+	buf.get(itr, int_res);
 	fail_unless(int_res == int_sample);
-	itr.~iterator();
+	itr.unlink();
 	buf.dropBack(sz);
 	fail_unless(buf.empty());
 	/* Test non-template ::addBack() method. */
@@ -132,27 +132,27 @@ buffer_basic()
 	buf.get(itr, (char *)&char_res, SAMPLES_CNT);
 	for (int i = 0; i < SAMPLES_CNT; ++i)
 		fail_unless(char_samples[i] == char_res[i]);
-	itr.~iterator();
+	itr.unlink();
 	buf.dropFront(SAMPLES_CNT);
 	fail_unless(buf.empty());
 	/* Add double value in buffer. */
 	itr = buf.appendBack(sizeof(double));
-	buf.set(itr, std::move(double_sample));
+	buf.set(itr, double_sample);
 	double double_res = 0;
 	buf.get(itr, double_res);
 	fail_unless(double_res == double_sample);
-	itr.~iterator();
+	itr.unlink();
 	buf.dropFront(sizeof(double));
 	fail_unless(buf.empty());
 	/* Add struct value in buffer. */
 	itr = buf.appendBack(sizeof(struct_sample));
-	buf.set(itr, std::move(struct_sample));
+	buf.set(itr, struct_sample);
 	struct struct_sample struct_res = { };
 	buf.get(itr, struct_res);
 	fail_unless(struct_res.c == struct_sample.c);
 	fail_unless(struct_res.i == struct_sample.i);
 	fail_unless(struct_res.d == struct_sample.d);
-	itr.~iterator();
+	itr.unlink();
 	buf.dropFront(sizeof(struct_sample));
 	fail_unless(buf.empty());
 }
@@ -164,22 +164,22 @@ buffer_iterator()
 	TEST_INIT();
 	tnt::Buffer<N> buf;
 	fillBuffer(buf, SAMPLES_CNT);
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	auto itr = buf.begin();
 	char res = 'x';
 	/* Iterator to the start of buffer should not change. */
 	for (int i = 0; i < SAMPLES_CNT; ++i) {
-		buf.template get<char>(itr, res);
+		buf.get(itr, res);
 		fail_unless(res == char_samples[i]);
 		++itr;
 	}
-	buf.template get<char>(itr, res);
+	buf.get(itr, res);
 	fail_unless(res == end_marker);
 	auto begin = buf.begin();
 	while (begin != itr)
 		begin += 1;
 	res = 'x';
-	buf.template get<char>(begin, res);
+	buf.get(begin, res);
 	fail_unless(res == end_marker);
 	buf.dropFront(SAMPLES_CNT);
 	auto end = buf.end();
@@ -187,9 +187,9 @@ buffer_iterator()
 	fail_unless(end != begin);
 	++itr;
 	fail_unless(end == itr);
-	itr.~iterator();
-	begin.~iterator();
-	end.~iterator();
+	itr.unlink();
+	begin.unlink();
+	end.unlink();
 	buf.dropBack(1);
 	fail_unless(buf.empty());
 }
@@ -201,12 +201,12 @@ buffer_insert()
 	TEST_INIT();
 	tnt::Buffer<N> buf;
 	fillBuffer(buf, SAMPLES_CNT);
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	auto begin = buf.begin();
 	auto mid_itr = buf.end();
 	auto mid_itr2 = buf.end();
 	fillBuffer(buf, SAMPLES_CNT);
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	auto end_itr = buf.end();
 	/* For SMALL_BLOCK_SZ = 32
 	 * Buffer:bcnt=3|sz=8|01234567||sz=8|89#01234||sz=6|56789#|
@@ -217,37 +217,37 @@ buffer_insert()
 	char res = 'x';
 	mid_itr += SMALL_BLOCK_SZ / 2;
 	for (int i = 0; i < SAMPLES_CNT / 2; ++i) {
-		buf.template get<char>(mid_itr, res);
+		buf.get(mid_itr, res);
 		fail_unless(res == char_samples[i]);
 		++mid_itr;
 	}
 	mid_itr2 += SMALL_BLOCK_SZ / 2;
 	for (int i = 0; i < SAMPLES_CNT / 2; ++i) {
-		buf.template get<char>(mid_itr2, res);
+		buf.get(mid_itr2, res);
 		fail_unless(res == char_samples[i]);
 		++mid_itr2;
 	}
-	begin.~iterator();
-	mid_itr.~iterator();
-	mid_itr2.~iterator();
-	end_itr.~iterator();
+	begin.unlink();
+	mid_itr.unlink();
+	mid_itr2.unlink();
+	end_itr.unlink();
 	eraseBuffer(buf);
 	/* Try the same but with more elements in buffer (i.e. more blocks). */
 	fillBuffer(buf, SAMPLES_CNT * 2);
-	//buf.addBack(std::move(end_marker));
+	//buf.addBack(end_marker);
 	mid_itr = buf.end();
 	fillBuffer(buf, SAMPLES_CNT * 4);
 	mid_itr2 = buf.end();
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	fillBuffer(buf, SAMPLES_CNT * 4);
 	end_itr = buf.end();
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	fillBuffer(buf, SAMPLES_CNT * 2);
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	buf.insert(mid_itr, SAMPLES_CNT * 3);
-	buf.template get<char>(end_itr, res);
+	buf.get(end_itr, res);
 	fail_unless(res == end_marker);
-	buf.template get<char>(mid_itr2, res);
+	buf.get(mid_itr2, res);
 	fail_unless(res == end_marker);
 	/*
 	 * Buffer content prior to the iterator used to process insertion
@@ -255,7 +255,7 @@ buffer_insert()
 	 */
 	int i = 0;
 	for (auto tmp = buf.begin(); tmp < mid_itr; ++tmp) {
-		buf.template get<char>(tmp, res);
+		buf.get(tmp, res);
 		fail_unless(res == char_samples[i++ % SAMPLES_CNT]);
 	}
 }
@@ -267,12 +267,12 @@ buffer_release()
 	TEST_INIT();
 	tnt::Buffer<N> buf;
 	fillBuffer(buf, SAMPLES_CNT);
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	auto begin = buf.begin();
 	auto mid_itr = buf.end();
 	auto mid_itr2 = buf.end();
 	fillBuffer(buf, SAMPLES_CNT);
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	auto end_itr = buf.end();
 	/* For SMALL_BLOCK_SZ = 32
 	 * Buffer:|sz=8|01234567||sz=8|89#01234||sz=6|56789#|
@@ -286,36 +286,36 @@ buffer_release()
 	 */
 	char res = 'x';
 	for (int i = 0; i < SAMPLES_CNT / 2; ++i) {
-		buf.template get<char>(mid_itr, res);
+		buf.get(mid_itr, res);
 		fail_unless(res == char_samples[i + SAMPLES_CNT / 2]);
 		++mid_itr;
 	}
 	for (int i = 0; i < SAMPLES_CNT / 2; ++i) {
-		buf.template get<char>(mid_itr2, res);
+		buf.get(mid_itr2, res);
 		fail_unless(res == char_samples[i + SAMPLES_CNT / 2]);
 		++mid_itr2;
 	}
 	fail_unless(++mid_itr == end_itr);
-	mid_itr.~iterator();
-	mid_itr2.~iterator();
-	end_itr.~iterator();
-	begin.~iterator();
+	mid_itr.unlink();
+	mid_itr2.unlink();
+	end_itr.unlink();
+	begin.unlink();
 	eraseBuffer(buf);
 	/* Try the same but with more elements in buffer (i.e. more blocks). */
 	fillBuffer(buf, SAMPLES_CNT * 2);
 	mid_itr = buf.end();
 	fillBuffer(buf, SAMPLES_CNT * 4);
 	mid_itr2 = buf.end();
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	fillBuffer(buf, SAMPLES_CNT * 4);
 	end_itr = buf.end();
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	fillBuffer(buf, SAMPLES_CNT * 2);
-	buf.addBack(std::move(end_marker));
+	buf.addBack(end_marker);
 	buf.release(mid_itr, SAMPLES_CNT * 3);
-	buf.template get<char>(end_itr, res);
+	buf.get(end_itr, res);
 	fail_unless(res == end_marker);
-	buf.template get<char>(mid_itr2, res);
+	buf.get(mid_itr2, res);
 	fail_unless(res == end_marker);
 	/*
 	 * Buffer content prior to the iterator used to process insertion
@@ -323,7 +323,7 @@ buffer_release()
 	 */
 	int i = 0;
 	for (auto tmp = buf.begin(); tmp < mid_itr; ++tmp) {
-		buf.template get<char>(tmp, res);
+		buf.get(tmp, res);
 		fail_unless(res == char_samples[i++ % SAMPLES_CNT]);
 	}
 }
@@ -337,21 +337,21 @@ buffer_out()
 {
 	TEST_INIT();
 	tnt::Buffer<N> buf;
-	buf.template addBack<char>(0xce); // uin32 tag
+	buf.addBack(0xce); // uin32 tag
 	auto save = buf.appendBack(4); // uint32, will be set later
-	size_t total = buf.template addBack<char>(0x82); // map(2) - header
-	total += buf.template addBack<char>(0x00); // IPROTO_REQUEST_TYPE
-	total += buf.template addBack<char>(0x01); // IPROTO_SELECT
-	total += buf.template addBack<char>(0x01); // IPROTO_SYNC
-	total += buf.template addBack<char>(0x00); // sync = 0
-	total += buf.template addBack<char>(0x82); // map(2) - body
-	total += buf.template addBack<char>(0x10); // IPROTO_SPACE_ID
-	total += buf.template addBack<char>(0xcd); // uint16 tag
-	total += buf.template addBack(__builtin_bswap16(512)); // space_id = 512
-	total += buf.template addBack<char>(0x20); // IPROTO_KEY
-	total += buf.template addBack<char>(0x90); // empty array key
+	size_t total = buf.addBack(0x82); // map(2) - header
+	total += buf.addBack(0x00); // IPROTO_REQUEST_TYPE
+	total += buf.addBack(0x01); // IPROTO_SELECT
+	total += buf.addBack(0x01); // IPROTO_SYNC
+	total += buf.addBack(0x00); // sync = 0
+	total += buf.addBack(0x82); // map(2) - body
+	total += buf.addBack(0x10); // IPROTO_SPACE_ID
+	total += buf.addBack(0xcd); // uint16 tag
+	total += buf.addBack(__builtin_bswap16(512)); // space_id = 512
+	total += buf.addBack(0x20); // IPROTO_KEY
+	total += buf.addBack(0x90); // empty array key
 	buf.set(save, __builtin_bswap32(total)); // set calculated size
-	save.~iterator();
+	save.unlink();
 	do {
 		int IOVEC_MAX = 1024;
 		struct iovec vec[IOVEC_MAX];

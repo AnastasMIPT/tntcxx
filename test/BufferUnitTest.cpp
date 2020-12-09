@@ -7,7 +7,7 @@ template<size_t N>
 struct Announcer
 {
 	Announcer(const char *testName) : m_testName(testName) {
-		std::cout << "*** TEST " << m_testName << "<" << N << ">" <<
+		std::cout <<	 "*** TEST " << m_testName << "<" << N << ">" <<
 		" started... ***" << std::endl;
 	}
 	~Announcer() {

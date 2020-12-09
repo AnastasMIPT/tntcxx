@@ -70,19 +70,15 @@ private:
 		size_t id;
 	protected:
 		/** Prevent base class from being instantiated. */
-		BlockBase() {};
+		BlockBase() = default;
+		~BlockBase() = default;
 		BlockBase(BlockBase &) = delete;
 		BlockBase& operator=(BlockBase &) = delete;
-		~BlockBase() {};
 	};
 	struct Block : BlockBase
 	{
 		static constexpr size_t DATA_SIZE =
 			allocator::REAL_SIZE - sizeof(BlockBase);
-		static_assert(allocator::REAL_SIZE > sizeof(BlockBase),
-			      "Allocation size must be more that 16 bytes");
-		static_assert(allocator::REAL_SIZE % alignof(BlockBase) == 0,
-			      "Allocation size must be multiple of 16 bytes");
 		/**
 		 * Block itself is allocated in the same chunk so the size
 		 * of available memory to keep the data is less than allocator
@@ -90,67 +86,27 @@ private:
 		 */
 		char data[DATA_SIZE];
 
-		void* operator new(size_t size)
-		{
-			assert(size >= sizeof(Block));
-			(void)size;
-			return allocator::allocate();
-		}
-		void operator delete(void *ptr)
-		{
-			allocator::deallocate((char *)ptr);
-		}
+		void* operator new(size_t size);
+		void operator delete(void *ptr);
 
 		char  *begin() { return data; }
 		char  *end()   { return data + DATA_SIZE; }
 		Block *prev()  { return rlist_prev_entry(this, in_blocks); }
 		Block *next()  { return rlist_next_entry(this, in_blocks); }
 	};
-	static_assert(sizeof(Block) == allocator::REAL_SIZE,
-		      "size of buffer block is expected to match with "
-		      "allocation size");
-	static Block *newBlock(struct rlist *addToList)
-	{
-		Block *b = new Block;
-		assert(b != nullptr);
-		rlist_add_tail(addToList, &b->in_blocks);
-		return b;
-	}
-	static void delBlock(Block *b)
-	{
-		rlist_del(&b->in_blocks);
-		delete b;
-	}
-	static Block *delBlockAndPrev(Block *b)
-	{
-		Block *tmp = b->prev();
-		delBlock(b);
-		return tmp;
-	}
-	static Block *delBlockAndNext(Block *b)
-	{
-		Block *tmp = b->next();
-		delBlock(b);
-		return tmp;
-	}
+
+	static Block *newBlock(struct rlist *addToList);
+	static void delBlock(Block *b);
+	static Block *delBlockAndPrev(Block *b);
+	static Block *delBlockAndNext(Block *b);
 
 	/**
 	 * Allocate a number of blocks to fit required size. This structure is
 	 * used to RAII idiom to keep several blocks allocation consistent.
 	 */
 	struct Blocks : public rlist {
-		Blocks()
-		{
-			rlist_create(this);
-		}
-		~Blocks()
-		{
-			while (!rlist_empty(this)) {
-				Block *b = rlist_first_entry(this, Block,
-							     in_blocks);
-				delBlock(b);
-			}
-		}
+		Blocks() { rlist_create(this); }
+		~Blocks();
 	};
 public:
 	/** =============== Iterator definition =============== */
@@ -159,118 +115,32 @@ public:
 	/** Give access to private fields of iterator to Buffer. */
 	friend class Buffer;
 	public:
-		iterator(Buffer &buffer, Block *block, char *offset, bool is_head)
-			: m_buffer(buffer), m_block(block), m_position(offset)
-		{
-			if (is_head)
-				rlist_add(&m_buffer.m_iterators, &in_iters);
-			else
-				rlist_add_tail(&m_buffer.m_iterators, &in_iters);
-		}
-		iterator(const iterator &other)
-			: m_buffer(other.m_buffer), m_block(other.m_block),
-			  m_position(other.m_position)
-		{
-			rlist_add_tail(&other.in_iters, &in_iters);
-		}
-		iterator& operator = (const iterator& other)
-		{
-			if (this == &other)
-				return *this;
-			assert(&m_buffer == &other.m_buffer);
-			m_block = other.m_block;
-			m_position = other.m_position;
-			rlist_del(&in_iters);
-			rlist_add_tail(&other.in_iters, &in_iters);
-			return *this;
-		}
-		iterator& operator ++ ()
-		{
-			moveForward(1);
-			adjustPositionForward();
-			return *this;
-		}
-		iterator& operator += (size_t step)
-		{
-			moveForward(step);
-			/* Adjust iterator's position in the list of iterators. */
-			adjustPositionForward();
-			return *this;
-		}
-		char operator * () const
-		{
-			return *m_position;
-		}
-		friend bool operator == (const iterator &a, const iterator &b)
-		{
-			assert(&a.m_buffer == &b.m_buffer);
-			return a.m_position == b.m_position;
-		}
-		friend bool operator != (const iterator &a, const iterator &b)
-		{
-			assert(&a.m_buffer == &b.m_buffer);
-			return a.m_position != b.m_position;
-		}
-		friend bool operator < (const iterator &a, const iterator &b)
-		{
-			assert(&a.m_buffer == &b.m_buffer);
-			return std::tie(a.m_block->id, a.m_position) <
-			       std::tie(b.m_block->id, b.m_position);
-		}
+		iterator(Buffer &buffer, Block *block, char *offset, bool is_head);
+		iterator(const iterator &other);
+		~iterator() { rlist_del_entry(this, in_iters); }
+
+		iterator& operator = (const iterator& other);
+		iterator& operator ++ ();
+		iterator& operator += (size_t step);
+		char operator  * () const { return *m_position; }
+		bool operator == (const iterator &a) const;
+		bool operator != (const iterator &a) const;
+		bool operator  < (const iterator &a) const;
+
 		/** Remove from linked list of iterators. */
-		void unlink()
-		{
-			rlist_del_entry(this, in_iters);
-		}
-		~iterator()
-		{
-			rlist_del_entry(this, in_iters);
-		}
+		void unlink() { rlist_del_entry(this, in_iters); }
 	private:
 		/**
 		 * Return pointer to avoid copy/assignment when it is not
 		 * required.
 		 */
 		iterator* next() { return rlist_next_entry(this, in_iters); }
-		bool isLast()
-		{
-			return this == rlist_last_entry(&m_buffer.m_iterators,
-							iterator, in_iters);
-		}
+		bool isLast() { return in_iters.next == &m_buffer.m_iterators; }
 		/** Adjust iterator's position in list of iterators after
 		 * moveForward. */
-		void adjustPositionForward()
-		{
-			if (isLast() || !(*next() < *this))
-				return;
-			iterator *itr = next();
-			while (!itr->isLast() && *itr->next() < *this)
-				itr = itr->next();
-			// TODO: avoid excess instructions in rlist_del.
-			rlist_del(&in_iters);
-			rlist_add(&itr->in_iters, &in_iters);
-		}
-		void moveForward(size_t step)
-		{
-			assert(m_block->end() >= m_position);
-			while (step > (size_t)(m_block->end() - m_position))
-			{
-				step -= m_block->end() - m_position;
-				m_block = m_block->next();
-				m_position = m_block->begin();;
-			}
-			m_position += step;
-		}
-		void moveBackward(size_t step)
-		{
-			assert(m_block->begin() <= m_position);
-			while (step >= (size_t)(m_position - m_block->begin())) {
-				step -= m_position - m_block->begin();
-				m_block = m_block->prev();
-				m_position = m_block->end();
-			}
-			m_position -= step;
-		}
+		void adjustPositionForward();
+		void moveForward(size_t step);
+		void moveBackward(size_t step);
 
 		/** Link to the buffer iterator belongs to. */
 		Buffer& m_buffer;
@@ -365,7 +235,7 @@ public:
 	size_t getIOV(const iterator &itr, struct iovec *vecs, size_t max_size);
 
 	/** Return true if there's no data in the buffer. */
-	bool empty() const;
+	bool empty() const { return m_begin == m_end; }
 private:
 	Block *firstBlock();
 	Block *lastBlock();
@@ -383,6 +253,59 @@ private:
 };
 
 template <size_t N, class allocator>
+void*
+Buffer<N, allocator>::Block::operator new(size_t size)
+{
+	assert(size >= sizeof(Block));
+	(void)size;
+	return allocator::allocate();
+}
+
+template <size_t N, class allocator>
+void
+Buffer<N, allocator>::Block::operator delete(void *ptr)
+{
+	allocator::deallocate((char *)ptr);
+}
+
+
+template <size_t N, class allocator>
+typename Buffer<N, allocator>::Block *
+Buffer<N, allocator>::newBlock(struct rlist *addToList)
+{
+	Block *b = new Block;
+	assert(b != nullptr);
+	rlist_add_tail(addToList, &b->in_blocks);
+	return b;
+}
+
+template <size_t N, class allocator>
+void
+Buffer<N, allocator>::delBlock(Block *b)
+{
+	rlist_del(&b->in_blocks);
+	delete b;
+}
+
+template <size_t N, class allocator>
+typename Buffer<N, allocator>::Block *
+Buffer<N, allocator>::delBlockAndPrev(Block *b)
+{
+	Block *tmp = b->prev();
+	delBlock(b);
+	return tmp;
+}
+
+template <size_t N, class allocator>
+typename Buffer<N, allocator>::Block *
+Buffer<N, allocator>::delBlockAndNext(Block *b)
+{
+	Block *tmp = b->next();
+	delBlock(b);
+	return tmp;
+}
+
+template <size_t N, class allocator>
 typename Buffer<N, allocator>::Block *
 Buffer<N, allocator>::firstBlock()
 {
@@ -397,8 +320,143 @@ Buffer<N, allocator>::lastBlock()
 }
 
 template <size_t N, class allocator>
+Buffer<N, allocator>::Blocks::~Blocks()
+{
+	while (!rlist_empty(this)) {
+		Block *b = rlist_first_entry(this, Block,
+					     in_blocks);
+		delBlock(b);
+	}
+}
+
+template <size_t N, class allocator>
+Buffer<N, allocator>::iterator::iterator(Buffer& buffer, Block *block,
+					 char *offset, bool is_head)
+	: m_buffer(buffer), m_block(block), m_position(offset)
+{
+	if (is_head)
+		rlist_add(&m_buffer.m_iterators, &in_iters);
+	else
+		rlist_add_tail(&m_buffer.m_iterators, &in_iters);
+}
+
+template <size_t N, class allocator>
+Buffer<N, allocator>::iterator::iterator(const iterator& other)
+	: m_buffer(other.m_buffer), m_block(other.m_block),
+	  m_position(other.m_position)
+{
+	rlist_add_tail(&other.in_iters, &in_iters);
+}
+
+template <size_t N, class allocator>
+typename Buffer<N, allocator>::iterator&
+Buffer<N, allocator>::iterator::operator = (const iterator& other)
+{
+	if (this == &other)
+		return *this;
+	assert(&m_buffer == &other.m_buffer);
+	m_block = other.m_block;
+	m_position = other.m_position;
+	rlist_del(&in_iters);
+	rlist_add_tail(&other.in_iters, &in_iters);
+	return *this;
+}
+
+template <size_t N, class allocator>
+typename Buffer<N, allocator>::iterator&
+Buffer<N, allocator>::iterator::operator++()
+{
+	moveForward(1);
+	adjustPositionForward();
+	return *this;
+}
+
+template <size_t N, class allocator>
+typename Buffer<N, allocator>::iterator&
+Buffer<N, allocator>::iterator::operator+=(size_t step)
+{
+	moveForward(step);
+	/* Adjust iterator's position in the list of iterators. */
+	adjustPositionForward();
+	return *this;
+}
+
+template <size_t N, class allocator>
+bool
+Buffer<N, allocator>::iterator::operator==(const iterator& a) const
+{
+	assert(&m_buffer == &a.m_buffer);
+	return m_position == a.m_position;
+}
+
+template <size_t N, class allocator>
+bool
+Buffer<N, allocator>::iterator::operator!=(const iterator& a) const
+{
+	assert(&m_buffer == &a.m_buffer);
+	return m_position != a.m_position;
+}
+
+template <size_t N, class allocator>
+bool
+Buffer<N, allocator>::iterator::operator<(const iterator& a) const
+{
+	assert(&m_buffer == &a.m_buffer);
+	return std::tie(m_block->id, m_position) <
+	       std::tie(a.m_block->id, a.m_position);
+}
+
+template <size_t N, class allocator>
+void
+Buffer<N, allocator>::iterator::adjustPositionForward()
+{
+	if (isLast() || !(*next() < *this))
+		return;
+	iterator *itr = next();
+	while (!itr->isLast() && *itr->next() < *this)
+		itr = itr->next();
+	// TODO: avoid excess instructions in rlist_del.
+	rlist_del(&in_iters);
+	rlist_add(&itr->in_iters, &in_iters);
+}
+
+template <size_t N, class allocator>
+void
+Buffer<N, allocator>::iterator::moveForward(size_t step)
+{
+	assert(m_block->end() >= m_position);
+	while (step > (size_t) (m_block->end() - m_position)) {
+		step -= m_block->end() - m_position;
+		m_block = m_block->next();
+		m_position = m_block->begin();;
+	}
+	m_position += step;
+}
+
+template <size_t N, class allocator>
+void
+Buffer<N, allocator>::iterator::moveBackward(size_t step)
+{
+	assert(m_block->begin() <= m_position);
+	while (step >= (size_t) (m_position - m_block->begin())) {
+		step -= m_position - m_block->begin();
+		m_block = m_block->prev();
+		m_position = m_block->end();
+	}
+	m_position -= step;
+}
+
+template <size_t N, class allocator>
 Buffer<N, allocator>::Buffer()
 {
+	static_assert(allocator::REAL_SIZE > sizeof(BlockBase),
+		      "Allocation size must be more that 16 bytes");
+	static_assert(allocator::REAL_SIZE % alignof(BlockBase) == 0,
+		      "Allocation size must be multiple of 16 bytes");
+	static_assert(sizeof(Block) == allocator::REAL_SIZE,
+		      "size of buffer block is expected to match with "
+			      "allocation size");
+
 	rlist_create(&m_blocks);
 	rlist_create(&m_iterators);
 	m_begin = nullptr;
@@ -861,13 +919,6 @@ Buffer<N, allocator>::has(const iterator& itr, size_t size)
 	}
 	size_t have = m_end - block->data;
 	return size <= have;
-}
-
-template <size_t N, class allocator>
-bool
-Buffer<N, allocator>::empty() const
-{
-	return m_begin == m_end;
 }
 
 } // namespace tnt {

@@ -40,6 +40,7 @@
 
 #include "../Utils/Mempool.hpp"
 #include "../Utils/rlist.h"
+#include "../Utils/CStr.hpp"
 
 namespace tnt {
 
@@ -124,6 +125,7 @@ public:
 		iterator& operator = (const iterator& other);
 		iterator& operator ++ ();
 		iterator& operator += (size_t step);
+		iterator operator + (size_t step);
 		char operator  * () const { return *m_position; }
 		bool operator == (const iterator &a) const;
 		bool operator != (const iterator &a) const;
@@ -176,18 +178,13 @@ public:
 	 * (append data). @a size must be less than reserved (i.e. available)
 	 * free memory in buffer; UB otherwise.
 	 */
-	size_t addBack(const char *buf, size_t size);
+	void addBack(const char *buf, size_t size);
+	void advanceBack(size_t size);
 	template <class T>
-	size_t addBack(T&& t);
+	void addBack(const T& t);
+	template <char... C>
+	void addBack(CStr<C...>);
 
-	/**
-	 * Reserve memory of size @a size at the end of buffer.
-	 * Return iterator pointing at the starting position of that chunk.
-	 */
-	iterator appendBack(size_t size);
-	/**
-	 * Release buffer's memory
-	 */
 	void dropBack(size_t size);
 	void dropFront(size_t size);
 
@@ -394,6 +391,15 @@ Buffer<N, allocator>::iterator::operator+=(size_t step)
 }
 
 template <size_t N, class allocator>
+typename Buffer<N, allocator>::iterator
+Buffer<N, allocator>::iterator::operator+(size_t step)
+{
+	iterator res(*this);
+	res += step;
+	return res;
+}
+
+template <size_t N, class allocator>
 bool
 Buffer<N, allocator>::iterator::operator==(const iterator& a) const
 {
@@ -518,27 +524,82 @@ Buffer<N, allocator>::end()
 }
 
 template <size_t N, class allocator>
-typename Buffer<N, allocator>::iterator
-Buffer<N, allocator>::appendBack(size_t size)
+void
+Buffer<N, allocator>::addBack(const char *data, size_t size)
 {
 	assert(size != 0);
-	assert(!rlist_empty(&m_blocks));
 
 	Block *block = lastBlock();
-	char *itr_offset = m_end;
 	size_t left_in_block = block->end() - m_end;
-
+	if (left_in_block > size) {
+		memcpy(m_end, data, size);
+		m_end += size;
+		return;
+	}
 	char *new_end = m_end;
 	Blocks new_blocks(*this);
-	while (size >= left_in_block) {
+	do {
+		memcpy(new_end, data, left_in_block);
+		Block *b = newBlock(&new_blocks);
+		new_end = b->begin();
+		size -= left_in_block;
+		data += left_in_block;
+		left_in_block = Block::DATA_SIZE;
+	} while (size >= left_in_block);
+	memcpy(new_end, data, size);
+	rlist_splice_tail(&m_blocks, &new_blocks);
+	m_end = new_end + size;
+}
+
+template <size_t N, class allocator>
+void
+Buffer<N, allocator>::advanceBack(size_t size)
+{
+	assert(size != 0);
+
+	Block *block = lastBlock();
+	size_t left_in_block = block->end() - m_end;
+	if (left_in_block > size) {
+		m_end += size;
+		return;
+	}
+	char *new_end = m_end;
+	Blocks new_blocks(*this);
+	do {
 		Block *b = newBlock(&new_blocks);
 		new_end = b->begin();
 		size -= left_in_block;
 		left_in_block = Block::DATA_SIZE;
-	}
+	} while (size >= left_in_block);
 	rlist_splice_tail(&m_blocks, &new_blocks);
 	m_end = new_end + size;
-	return iterator(*this, block, itr_offset, false);
+}
+
+template <size_t N, class allocator>
+template <class T>
+void
+Buffer<N, allocator>::addBack(const T& t)
+{
+	char data[sizeof(T)];
+	memcpy(data, &t, sizeof(T));
+	addBack(data, sizeof(T));
+}
+
+template <size_t N, class allocator>
+template <char... C>
+void
+Buffer<N, allocator>::addBack(CStr<C...>)
+{
+	if constexpr (CStr<C...>::size != 0) {
+		Block *block = lastBlock();
+		size_t left_in_block = block->end() - m_end;
+		if (left_in_block > CStr<C...>::rnd_size) {
+			memcpy(m_end, CStr<C...>::data, CStr<C...>::rnd_size);
+			m_end += CStr<C...>::size;
+			return;
+		}
+		addBack(CStr<C...>::data, CStr<C...>::size);
+	}
 }
 
 template <size_t N, class allocator>
@@ -622,30 +683,6 @@ Buffer<N, allocator>::dropFront(size_t size)
 }
 
 template <size_t N, class allocator>
-size_t
-Buffer<N, allocator>::addBack(const char *buf, size_t size)
-{
-	// TODO: optimization: rewrite without iterators.
-	iterator itr = appendBack(size);
-	assert(itr.m_block != nullptr && itr.m_position != nullptr);
-	set(itr, buf, size);
-	return size;
-}
-
-template <size_t N, class allocator>
-template <class T>
-size_t
-Buffer<N, allocator>::addBack(T&& t)
-{
-	static_assert(std::is_standard_layout_v<std::remove_reference_t<T>>,
-		      "T is expected to have standard layout");
-	// TODO: optimization: rewrite without iterators.
-	iterator itr = appendBack(sizeof(T));
-	set(itr, std::forward<T>(t));
-	return sizeof(T);
-}
-
-template <size_t N, class allocator>
 void
 Buffer<N, allocator>::insert(const iterator &itr, size_t size)
 {
@@ -653,7 +690,7 @@ Buffer<N, allocator>::insert(const iterator &itr, size_t size)
 	/* Remember last block before extending the buffer. */
 	Block *src_block = lastBlock();
 	char *src_block_end = m_end;
-	(void) appendBack(size);
+	advanceBack(size);
 	Block *dst_block = lastBlock();
 	char *src = nullptr;
 	char *dst = nullptr;

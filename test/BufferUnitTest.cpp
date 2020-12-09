@@ -117,9 +117,8 @@ buffer_basic()
 	TEST_INIT();
 	tnt::Buffer<N> buf;
 	fail_unless(buf.empty());
-	size_t sz = buf.addBack(int_sample);
+	buf.addBack(int_sample);
 	fail_unless(! buf.empty());
-	fail_unless(sz == sizeof(int));
 	fail_if(buf.debugSelfCheck());
 	auto itr = buf.begin();
 	int int_res = -1;
@@ -127,7 +126,7 @@ buffer_basic()
 	fail_unless(int_res == int_sample);
 	fail_if(buf.debugSelfCheck());
 	itr.unlink();
-	buf.dropBack(sz);
+	buf.dropBack(sizeof(int_sample));
 	fail_unless(buf.empty());
 	fail_if(buf.debugSelfCheck());
 	/* Test non-template ::addBack() method. */
@@ -144,7 +143,8 @@ buffer_basic()
 	fail_unless(buf.empty());
 	fail_if(buf.debugSelfCheck());
 	/* Add double value in buffer. */
-	itr = buf.appendBack(sizeof(double));
+	itr = buf.end();
+	buf.advanceBack(sizeof(double));
 	buf.set(itr, double_sample);
 	double double_res = 0;
 	buf.get(itr, double_res);
@@ -155,7 +155,8 @@ buffer_basic()
 	fail_unless(buf.empty());
 	fail_if(buf.debugSelfCheck());
 	/* Add struct value in buffer. */
-	itr = buf.appendBack(sizeof(struct_sample));
+	itr = buf.end();
+	buf.advanceBack(sizeof(struct_sample));
 	buf.set(itr, struct_sample);
 	struct struct_sample struct_res = { };
 	buf.get(itr, struct_res);
@@ -364,18 +365,20 @@ buffer_out()
 	TEST_INIT();
 	tnt::Buffer<N> buf;
 	buf.addBack(0xce); // uin32 tag
-	auto save = buf.appendBack(4); // uint32, will be set later
-	size_t total = buf.addBack(0x82); // map(2) - header
-	total += buf.addBack(0x00); // IPROTO_REQUEST_TYPE
-	total += buf.addBack(0x01); // IPROTO_SELECT
-	total += buf.addBack(0x01); // IPROTO_SYNC
-	total += buf.addBack(0x00); // sync = 0
-	total += buf.addBack(0x82); // map(2) - body
-	total += buf.addBack(0x10); // IPROTO_SPACE_ID
-	total += buf.addBack(0xcd); // uint16 tag
-	total += buf.addBack(__builtin_bswap16(512)); // space_id = 512
-	total += buf.addBack(0x20); // IPROTO_KEY
-	total += buf.addBack(0x90); // empty array key
+	auto save = buf.end();
+	buf.advanceBack(4); // uint32, will be set later
+	buf.addBack(0x82); // map(2) - header
+	buf.addBack(0x00); // IPROTO_REQUEST_TYPE
+	buf.addBack(0x01); // IPROTO_SELECT
+	buf.addBack(0x01); // IPROTO_SYNC
+	buf.addBack(0x00); // sync = 0
+	buf.addBack(0x82); // map(2) - body
+	buf.addBack(0x10); // IPROTO_SPACE_ID
+	buf.addBack(0xcd); // uint16 tag
+	buf.addBack(__builtin_bswap16(512)); // space_id = 512
+	buf.addBack(0x20); // IPROTO_KEY
+	buf.addBack(0x90); // empty array key
+	size_t total = buf.end() - save;
 	buf.set(save, __builtin_bswap32(total)); // set calculated size
 	fail_if(buf.debugSelfCheck());
 	save.unlink();

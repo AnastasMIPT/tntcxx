@@ -53,8 +53,10 @@ template<size_t N>
 static void
 fillBuffer(tnt::Buffer<N> &buffer, size_t size)
 {
-	for (size_t i = 0; i < size; ++i)
+	for (size_t i = 0; i < size; ++i) {
 		buffer.addBack(char_samples[i % SAMPLES_CNT]);
+		fail_if(buffer.debugSelfCheck());
+	}
 }
 
 template<size_t N>
@@ -66,6 +68,7 @@ eraseBuffer(tnt::Buffer<N> &buffer)
 	do {
 		size_t vec_size = buffer.getIOV(buffer.begin(), vec, IOVEC_MAX);
 		buffer.dropFront(vec_size);
+		fail_if(buffer.debugSelfCheck());
 	} while (!buffer.empty());
 }
 
@@ -117,16 +120,20 @@ buffer_basic()
 	size_t sz = buf.addBack(int_sample);
 	fail_unless(! buf.empty());
 	fail_unless(sz == sizeof(int));
+	fail_if(buf.debugSelfCheck());
 	auto itr = buf.begin();
 	int int_res = -1;
 	buf.get(itr, int_res);
 	fail_unless(int_res == int_sample);
+	fail_if(buf.debugSelfCheck());
 	itr.unlink();
 	buf.dropBack(sz);
 	fail_unless(buf.empty());
+	fail_if(buf.debugSelfCheck());
 	/* Test non-template ::addBack() method. */
 	buf.addBack((const char *)&char_samples, SAMPLES_CNT);
 	fail_unless(! buf.empty());
+	fail_if(buf.debugSelfCheck());
 	char char_res[SAMPLES_CNT];
 	itr = buf.begin();
 	buf.get(itr, (char *)&char_res, SAMPLES_CNT);
@@ -135,15 +142,18 @@ buffer_basic()
 	itr.unlink();
 	buf.dropFront(SAMPLES_CNT);
 	fail_unless(buf.empty());
+	fail_if(buf.debugSelfCheck());
 	/* Add double value in buffer. */
 	itr = buf.appendBack(sizeof(double));
 	buf.set(itr, double_sample);
 	double double_res = 0;
 	buf.get(itr, double_res);
 	fail_unless(double_res == double_sample);
+	fail_if(buf.debugSelfCheck());
 	itr.unlink();
 	buf.dropFront(sizeof(double));
 	fail_unless(buf.empty());
+	fail_if(buf.debugSelfCheck());
 	/* Add struct value in buffer. */
 	itr = buf.appendBack(sizeof(struct_sample));
 	buf.set(itr, struct_sample);
@@ -152,9 +162,11 @@ buffer_basic()
 	fail_unless(struct_res.c == struct_sample.c);
 	fail_unless(struct_res.i == struct_sample.i);
 	fail_unless(struct_res.d == struct_sample.d);
+	fail_if(buf.debugSelfCheck());
 	itr.unlink();
 	buf.dropFront(sizeof(struct_sample));
 	fail_unless(buf.empty());
+	fail_if(buf.debugSelfCheck());
 }
 
 template<size_t N>
@@ -165,6 +177,7 @@ buffer_iterator()
 	tnt::Buffer<N> buf;
 	fillBuffer(buf, SAMPLES_CNT);
 	buf.addBack(end_marker);
+	fail_if(buf.debugSelfCheck());
 	auto itr = buf.begin();
 	char res = 'x';
 	/* Iterator to the start of buffer should not change. */
@@ -182,9 +195,11 @@ buffer_iterator()
 	buf.get(begin, res);
 	fail_unless(res == end_marker);
 	buf.dropFront(SAMPLES_CNT);
+	fail_if(buf.debugSelfCheck());
 	auto end = buf.end();
 	fail_unless(end != itr);
 	fail_unless(end != begin);
+	fail_if(buf.debugSelfCheck());
 	++itr;
 	fail_unless(end == itr);
 	itr.unlink();
@@ -192,6 +207,7 @@ buffer_iterator()
 	end.unlink();
 	buf.dropBack(1);
 	fail_unless(buf.empty());
+	fail_if(buf.debugSelfCheck());
 }
 
 template <size_t N>
@@ -201,12 +217,16 @@ buffer_insert()
 	TEST_INIT();
 	tnt::Buffer<N> buf;
 	fillBuffer(buf, SAMPLES_CNT);
+	fail_if(buf.debugSelfCheck());
 	buf.addBack(end_marker);
+	fail_if(buf.debugSelfCheck());
 	auto begin = buf.begin();
 	auto mid_itr = buf.end();
 	auto mid_itr2 = buf.end();
 	fillBuffer(buf, SAMPLES_CNT);
+	fail_if(buf.debugSelfCheck());
 	buf.addBack(end_marker);
+	fail_if(buf.debugSelfCheck());
 	auto end_itr = buf.end();
 	/* For SMALL_BLOCK_SZ = 32
 	 * Buffer:bcnt=3|sz=8|01234567||sz=8|89#01234||sz=6|56789#|
@@ -219,12 +239,14 @@ buffer_insert()
 	for (int i = 0; i < SAMPLES_CNT / 2; ++i) {
 		buf.get(mid_itr, res);
 		fail_unless(res == char_samples[i]);
+		fail_if(buf.debugSelfCheck());
 		++mid_itr;
 	}
 	mid_itr2 += SMALL_BLOCK_SZ / 2;
 	for (int i = 0; i < SAMPLES_CNT / 2; ++i) {
 		buf.get(mid_itr2, res);
 		fail_unless(res == char_samples[i]);
+		fail_if(buf.debugSelfCheck());
 		++mid_itr2;
 	}
 	begin.unlink();
@@ -272,7 +294,9 @@ buffer_release()
 	auto mid_itr = buf.end();
 	auto mid_itr2 = buf.end();
 	fillBuffer(buf, SAMPLES_CNT);
+	fail_if(buf.debugSelfCheck());
 	buf.addBack(end_marker);
+	fail_if(buf.debugSelfCheck());
 	auto end_itr = buf.end();
 	/* For SMALL_BLOCK_SZ = 32
 	 * Buffer:|sz=8|01234567||sz=8|89#01234||sz=6|56789#|
@@ -312,7 +336,9 @@ buffer_release()
 	buf.addBack(end_marker);
 	fillBuffer(buf, SAMPLES_CNT * 2);
 	buf.addBack(end_marker);
+	fail_if(buf.debugSelfCheck());
 	buf.release(mid_itr, SAMPLES_CNT * 3);
+	fail_if(buf.debugSelfCheck());
 	buf.get(end_itr, res);
 	fail_unless(res == end_marker);
 	buf.get(mid_itr2, res);
@@ -351,12 +377,14 @@ buffer_out()
 	total += buf.addBack(0x20); // IPROTO_KEY
 	total += buf.addBack(0x90); // empty array key
 	buf.set(save, __builtin_bswap32(total)); // set calculated size
+	fail_if(buf.debugSelfCheck());
 	save.unlink();
 	do {
 		int IOVEC_MAX = 1024;
 		struct iovec vec[IOVEC_MAX];
 		size_t vec_size = buf.getIOV(buf.begin(), vec, IOVEC_MAX);
 		buf.dropFront(vec_size);
+		fail_if(buf.debugSelfCheck());
 	} while (!buf.empty());
 }
 

@@ -77,10 +77,6 @@ public:
 	}
 
 private:
-	template <class T, T V, size_t... I>
-	static constexpr auto const_bswap_helper(std::index_sequence<I...>);
-	template <class T, T V>
-	static constexpr auto const_bswap();
 	template <bool V>
 	static constexpr auto conv_const_bool();
 	template <uint64_t V>
@@ -119,22 +115,26 @@ private:
 	BUFFER& m_Buf;
 };
 
-template <class BUFFER>
 template <class T, T V, size_t... I>
-constexpr auto
-Enc<BUFFER>::const_bswap_helper(std::index_sequence<I...>)
+constexpr auto const_bswap_helper(std::index_sequence<I...>)
 {
 	return CStr<((V >> (8 * (sizeof...(I) - I - 1))) & 0xff)...>{};
 }
 
-template <class BUFFER>
 template <class T, T V>
-constexpr auto
-Enc<BUFFER>::const_bswap()
+constexpr auto const_bswap()
 {
 	return const_bswap_helper<std::make_unsigned_t<T>,
 		static_cast<std::make_unsigned_t<T>>(V)>(
 		std::make_index_sequence<sizeof(T)>{});
+}
+
+template <class T>
+under_int_t<T> enc_bswap(T t)
+{
+	under_uint_t<T> tmp;
+	memcpy(&tmp, &t, sizeof(T));
+	return bswap(tmp);
 }
 
 template <class BUFFER>
@@ -252,24 +252,24 @@ Enc<BUFFER>::add_int(CStr<C...> prefix, T t)
 		if constexpr (sizeof(T) > 4) if (t < INT32_MIN) {
 				auto add = CStr<'\xd3'>{};
 				m_Buf.addBack(prefix.join(add));
-				m_Buf.addBack(bswap(static_cast<int64_t>(t)));
+				m_Buf.addBack(enc_bswap(static_cast<int64_t>(t)));
 				return;
 			}
 		if constexpr (sizeof(T) > 2) if (t < INT16_MIN) {
 				auto add = CStr<'\xd2'>{};
 				m_Buf.addBack(prefix.join(add));
-				m_Buf.addBack(bswap(static_cast<int32_t>(t)));
+				m_Buf.addBack(enc_bswap(static_cast<int32_t>(t)));
 				return;
 			}
 		if constexpr (sizeof(T) > 1) if (t < INT8_MIN) {
 				auto add = CStr<'\xd1'>{};
 				m_Buf.addBack(prefix.join(add));
-				m_Buf.addBack(bswap(static_cast<int16_t>(t)));
+				m_Buf.addBack(enc_bswap(static_cast<int16_t>(t)));
 				return;
 			}
 		auto add = CStr<'\xd0'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<int8_t>(t)));
+		m_Buf.addBack(enc_bswap(static_cast<int8_t>(t)));
 		return;
 	}
 
@@ -282,24 +282,24 @@ Enc<BUFFER>::add_int(CStr<C...> prefix, T t)
 	if constexpr (sizeof(T) > 4) if (t > UINT32_MAX) {
 		auto add = CStr<'\xcf'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint64_t>(t)));
+		m_Buf.addBack(enc_bswap(static_cast<uint64_t>(t)));
 		return;
 	}
 	if constexpr (sizeof(T) > 2) if (t > UINT16_MAX) {
 		auto add = CStr<'\xce'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint32_t>(t)));
+		m_Buf.addBack(enc_bswap(static_cast<uint32_t>(t)));
 		return;
 	}
 	if constexpr (sizeof(T) > 1) if (t > UINT8_MAX) {
 		auto add = CStr<'\xcd'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint16_t>(t)));
+		m_Buf.addBack(enc_bswap(static_cast<uint16_t>(t)));
 		return;
 	}
 	auto add = CStr<'\xcc'>{};
 	m_Buf.addBack(prefix.join(add));
-	m_Buf.addBack(bswap(static_cast<uint8_t>(t)));
+	m_Buf.addBack(enc_bswap(static_cast<uint8_t>(t)));
 }
 
 template <class BUFFER>
@@ -314,7 +314,7 @@ Enc<BUFFER>::add_flt(CStr<C...> prefix, T t)
 	m_Buf.addBack(prefix.join(add));
 	under_uint_t<T> tmp;
 	memcpy(&tmp, &t, sizeof(T));
-	m_Buf.addBack(bswap(tmp));
+	m_Buf.addBack(enc_bswap(tmp));
 }
 
 template <class BUFFER>
@@ -334,18 +334,18 @@ Enc<BUFFER>::add_str(CStr<C...> prefix, T size)
 	if constexpr (sizeof(T) > 2) if (size > UINT16_MAX) {
 		auto add = CStr<'\xdb'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint32_t>(size)));
+		m_Buf.addBack(enc_bswap(static_cast<uint32_t>(size)));
 		return;
 	}
 	if constexpr (sizeof(T) > 1) if (size > UINT8_MAX) {
 		auto add = CStr<'\xda'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint16_t>(size)));
+		m_Buf.addBack(enc_bswap(static_cast<uint16_t>(size)));
 		return;
 	}
 	auto add = CStr<'\xd9'>{};
 	m_Buf.addBack(prefix.join(add));
-	m_Buf.addBack(bswap(static_cast<uint8_t>(size)));
+	m_Buf.addBack(enc_bswap(static_cast<uint8_t>(size)));
 }
 
 template <class BUFFER>
@@ -359,18 +359,18 @@ Enc<BUFFER>::add_bin(CStr<C...> prefix, T size)
 	if constexpr (sizeof(T) > 2) if (size > UINT16_MAX) {
 		auto add = CStr<'\xc6'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint32_t>(size)));
+		m_Buf.addBack(enc_bswap(static_cast<uint32_t>(size)));
 		return;
 	}
 	if constexpr (sizeof(T) > 1) if (size > UINT8_MAX) {
 		auto add = CStr<'\xc5'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint16_t>(size)));
+		m_Buf.addBack(enc_bswap(static_cast<uint16_t>(size)));
 		return;
 	}
 	auto add = CStr<'\xc4'>{};
 	m_Buf.addBack(prefix.join(add));
-	m_Buf.addBack(bswap(static_cast<uint8_t>(size)));
+	m_Buf.addBack(enc_bswap(static_cast<uint8_t>(size)));
 }
 
 template <class BUFFER>
@@ -391,12 +391,12 @@ Enc<BUFFER>::add_arr(CStr<C...> prefix, T size)
 	if constexpr (sizeof(T) > 2) if (size > UINT16_MAX) {
 		auto add = CStr<'\xdb'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint32_t>(size)));
+		m_Buf.addBack(enc_bswap(static_cast<uint32_t>(size)));
 		return;
 	}
 	auto add = CStr<'\xdc'>{};
 	m_Buf.addBack(prefix.join(add));
-	m_Buf.addBack(bswap(static_cast<uint16_t>(size)));
+	m_Buf.addBack(enc_bswap(static_cast<uint16_t>(size)));
 }
 
 template <class BUFFER>
@@ -417,12 +417,12 @@ Enc<BUFFER>::add_map(CStr<C...> prefix, T size)
 	if constexpr (sizeof(T) > 2) if (size > UINT16_MAX) {
 		auto add = CStr<'\xdf'>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<uint32_t>(size)));
+		m_Buf.addBack(enc_bswap(static_cast<uint32_t>(size)));
 		return;
 	}
 	auto add = CStr<'\xde'>{};
 	m_Buf.addBack(prefix.join(add));
-	m_Buf.addBack(bswap(static_cast<uint16_t>(size)));
+	m_Buf.addBack(enc_bswap(static_cast<uint16_t>(size)));
 }
 
 template <class BUFFER>
@@ -528,7 +528,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		constexpr char tag_start = std::is_signed_v<T> ? '\xd0' : '\xcc';
 		auto add = CStr<tag_start + power_v<FIXED_TYPE>()>{};
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(bswap(static_cast<FIXED_TYPE>(t)));
+		m_Buf.addBack(enc_bswap(static_cast<FIXED_TYPE>(t)));
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (std::is_integral_v<T>) {
 		add_int(prefix, t);
@@ -562,7 +562,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 			sz = strlen(t);
 		else
 			sz = std::size(t);
-		m_Buf.addBack(bswap(static_cast<FIXED_TYPE>(sz)));
+		m_Buf.addBack(enc_bswap(static_cast<FIXED_TYPE>(sz)));
 		if constexpr(is_c_str_v<T>)
 			m_Buf.addBack(t, sz);
 		else
@@ -599,7 +599,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 			sz = strlen(t);
 		else
 			sz = std::size(t);
-		m_Buf.addBack(bswap(static_cast<FIXED_TYPE>(sz)));
+		m_Buf.addBack(enc_bswap(static_cast<FIXED_TYPE>(sz)));
 		if constexpr(is_c_str_v<T>)
 			m_Buf.addBack(t, sz);
 		else

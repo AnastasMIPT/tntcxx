@@ -63,54 +63,74 @@ using tnt::CStr;
  */
 
 /**
- * Range is a pair of iterators (in general meaning, pointers for example)
- * that has access methods as STL containers. Can be constructed by a pair
- * of iterators, or pointer and size, or by array and size.
- * There is also a range getter that has 'size' template parameter. Such a
- * range will have a fixed size.
- * The class Range is not expected to be used directly, better use range
- * functions that create certain objects.
+ * Simple helper for advancing standard iterators.
  */
-template <class T, size_t N>
-struct Range {
-	static constexpr bool dynamic = false;
-	using is_fixed_size = std::true_type;
-	using type = T;
-	const T& m_begin;
-	using iter_t = std::conditional_t<std::is_array_v<T>,
-		const std::remove_extent_t<T>*, T>;
-	iter_t begin() const { return m_begin; }
-	iter_t end() const { return m_begin + N; }
-	auto data() const { return &m_begin[0]; }
-	static constexpr size_t size() { return N; }
-};
+template <class ITR>
+ITR advance(ITR& itr, size_t n) { auto r = itr; std::advance(r, n); return r; }
 
-template <class T>
-struct Range<T, 0> {
-	static constexpr bool dynamic = true;
-	using is_fixed_size = std::false_type;
-	using type = T;
-	T m_begin, m_end;
-	T begin() const { return m_begin; }
-	T end() const { return m_end; }
-	auto data() const { return &m_begin[0]; }
+/**
+ * Range is a pair of iterators (in general meaning, pointers for example)
+ * that has access methods as STL containers.
+ * Should be constructed only with range(..) methods by a pair
+ * of iterators or pointer and size. The size can be also passed as template
+ * parameter thus declaring a range of fixed size.
+ * Actual results will be one of the derivatives of Range class that will have
+ * the following bool static constexpr:
+ * is_fixed_size_v: the `size` method is static constexpr.
+ * is_contiguous_v: the object also has standard `data` method.
+ */
+template <class ITR1, class ITR2>
+struct RangeBase {
+	ITR1 m_begin;
+	ITR2 m_end;
+	ITR1 begin() const { return m_begin; }
+	const ITR2& end() const { return m_end; }
 	size_t size() const { return std::distance(m_begin, m_end); }
 };
 
-template <class T>
-constexpr Range<T, 0> range(T begin, T end) { return {begin, end}; }
+template <class ITR1, class ITR2, bool IS_FIXED_SIZE, size_t N>
+struct IteratorRange : RangeBase<ITR1, ITR2> {
+	static constexpr bool is_fixed_size_v = true;
+	static constexpr bool is_contiguous_v = false;
+	static constexpr size_t size() { return N; }
+};
+
+template <class ITR1, class ITR2>
+struct IteratorRange<ITR1, ITR2, false, 0> : RangeBase<ITR1, ITR2> {
+	static constexpr bool is_fixed_size_v = false;
+	static constexpr bool is_contiguous_v = false;
+};
+
+template <class ITR1, class ITR2, bool IS_FIXED_SIZE, size_t N>
+struct ContiguousRange : IteratorRange<ITR1, ITR2, IS_FIXED_SIZE, N> {
+	using IteratorRange<ITR1, ITR2, IS_FIXED_SIZE, N>::m_begin;
+	static constexpr bool is_contiguous_v = true;
+	auto data() const { return &*m_begin; }
+};
 
 template <class T>
-constexpr Range<T*, 0> range(T begin[], T* end) { return {begin, end}; }
+constexpr IteratorRange<const T&, const T&, false, 0>
+range(const T& begin, const T& end) { return {begin, end}; }
 
 template <class T>
-constexpr Range<T, 0> range(T begin, size_t size) { return {begin, begin + size}; }
+constexpr ContiguousRange<T*, T*, false, 0>
+range(T* begin, T* end) { return {begin, end}; }
 
 template <class T>
-constexpr Range<T*, 0> range(T begin[], size_t size) { return {begin, begin + size}; }
+constexpr IteratorRange<const T&, T, false, 0>
+range(const T& begin, size_t n) { return {begin, advance(begin, n)}; }
+
+template <class T>
+constexpr ContiguousRange<T*, T*, false, 0>
+range(T* begin, size_t n) { return {begin, begin + n}; }
 
 template <size_t N, class T>
-constexpr Range<T, N> range(const T& begin) { return {begin}; }
+constexpr IteratorRange<const T&, T, true, N>
+range(const T& begin) { return {begin, advance(begin, N)}; }
+
+template <size_t N, class T>
+constexpr ContiguousRange<T*, T*, true, N>
+range(T* begin) { return {begin, begin + N}; }
 
 /**
  * A group of specificators - as_str(..), as_bin(..), as_arr(..), as_map(..),
@@ -123,40 +143,40 @@ constexpr Range<T, N> range(const T& begin) { return {begin}; }
  * Specificators also accept the same arguments as range(..), in that case
  * it's a synonym of as_xxx(range(...)).
  */
-#define DEFINE_ARRLIKE_WRAPPER(name) \
-template <class T> \
-struct name##_holder { \
-	using type = T; \
-	const T& value; \
-}; \
-\
-template <class T> \
-constexpr name##_holder<T> as_##name(const T& t) { return name##_holder<T>{t}; } \
-\
-template <class T> \
-constexpr name##_holder<Range<T, 0>> as_##name(T b, T e) { return {{b, e}}; } \
-\
-template <class T> \
-constexpr name##_holder<Range<T*, 0>> as_##name(T b[], T* e) { return {{b, e}}; } \
-\
-template <class T> \
-constexpr name##_holder<Range<T, 0>> as_##name(T b, size_t s) { return {{b, b + s}}; } \
-\
-template <class T> \
-constexpr name##_holder<Range<T*, 0>> as_##name(T b[], size_t s) { return {{b, b + s}}; } \
-\
-template <size_t N, class T> \
-constexpr name##_holder<Range<T, N>> as_##name(const T& begin) { return {{begin}}; } \
-\
-struct forgot_to_add_semicolon \
+#define DEFINE_SIMPLE_WRAPPER(name)						\
+template <class T>								\
+struct name##_holder {								\
+	using type = T;								\
+	const T& value;								\
+};										\
+										\
+template <class... T>								\
+constexpr auto as_##name(const T&... t)						\
+{										\
+	if constexpr (sizeof ... (T) == 1) {					\
+		return name##_holder<T...>{t...};				\
+	} else {								\
+		using range_t = decltype(range(t...));				\
+		return name##_holder<range_t>(range(t...));			\
+	}									\
+}										\
+										\
+template <size_t N, class... T>							\
+constexpr auto as_##name(const T&... t)						\
+{										\
+	using range_t = decltype(range<N>(t...));				\
+	return name##_holder<range_t>(range<N>(t...));				\
+}										\
+										\
+struct forgot_to_add_semicolon
 
-DEFINE_ARRLIKE_WRAPPER(str);
-DEFINE_ARRLIKE_WRAPPER(bin);
-DEFINE_ARRLIKE_WRAPPER(arr);
-DEFINE_ARRLIKE_WRAPPER(map);
-DEFINE_ARRLIKE_WRAPPER(raw);
+DEFINE_SIMPLE_WRAPPER(str);
+DEFINE_SIMPLE_WRAPPER(bin);
+DEFINE_SIMPLE_WRAPPER(arr);
+DEFINE_SIMPLE_WRAPPER(map);
+DEFINE_SIMPLE_WRAPPER(raw);
 
-#undef DEFINE_ARRLIKE_WRAPPER
+#undef DEFINE_SIMPLE_WRAPPER
 
 /**
  * Specificator - as_ext(..). Creates a wrapper ext_holder that holds ext type
@@ -172,23 +192,23 @@ struct ext_holder {
 	const T& value;
 };
 
-template <class T>
-constexpr ext_holder<T> as_ext(uint8_t type, const T& t) { return {type, t}; }
+template <class... T>
+auto as_ext(uint8_t type, T&&... t)
+{
+	if constexpr (sizeof...(T) == 1) {
+		return ext_holder<T...>{type, t...};
+	} else {
+		using range_t = decltype(range(std::forward<T>(t)...));
+		return ext_holder<range_t>{type, range(std::forward<T>(t)...)};
+	}
+}
 
-template <class T>
-constexpr ext_holder<Range<T, 0>> as_ext(uint8_t type, T b, T e) { return {type, {b, e}}; }
-
-template <class T>
-constexpr ext_holder<Range<T*, 0>> as_ext(uint8_t type, T b[], T* e) { return {type, {b, e}}; }
-
-template <class T>
-constexpr ext_holder<Range<T, 0>> as_ext(uint8_t type, T b, size_t s) { return {type, {b, s}}; }
-
-template <class T>
-constexpr ext_holder<Range<T*, 0>> as_ext(uint8_t type, T b[], size_t s) { return {type, {b, s}}; }
-
-template <size_t N, class T>
-constexpr ext_holder<Range<T, N>> as_ext(uint8_t type, const T& begin) { return {type, {begin}}; }
+template <size_t N, class... T>
+auto as_ext(uint8_t type, T&&... t)
+{
+	using range_t = decltype(range<N>(std::forward<T>(t)...));
+	return ext_holder<range_t>{type, range<N>(std::forward<T>(t)...)};
+}
 
 /**
  * Specificator - track(..). Creates a wrapper track_holder that holds a value
@@ -214,13 +234,13 @@ track_holder<T, RANGE> track(const T& t, RANGE& r) { return {t, r}; }
  */
 template <size_t N>
 struct Reserve {
-	static constexpr bool dynamic = false;
+	static constexpr bool is_const_size_v = true;
 	static constexpr size_t value = N;
 };
 
 template <>
 struct Reserve<0> {
-	static constexpr bool dynamic = true;
+	static constexpr bool is_const_size_v = false;
 	size_t value;
 };
 

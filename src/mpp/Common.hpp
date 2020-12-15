@@ -71,15 +71,6 @@ inline uint16_t bswap(uint16_t x) { return __builtin_bswap16(x); }
 inline uint32_t bswap(uint32_t x) { return __builtin_bswap32(x); }
 inline uint64_t bswap(uint64_t x) { return __builtin_bswap64(x); }
 
-template <class T>
-T bswap(T t)
-{
-	under_uint_t<T> tmp;
-	memcpy(&tmp, &t, sizeof(T));
-	tmp = bswap(tmp);
-	memcpy(&t, &tmp, sizeof(T));
-	return t;
-}
 
 [[noreturn]] void unreachable() { assert(false); __builtin_unreachable(); }
 

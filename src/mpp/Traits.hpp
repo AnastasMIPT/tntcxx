@@ -95,7 +95,6 @@ template <class T> \
 constexpr bool id_name = id_name##_helper<T>::value
 
 /** Type checkers for types defined in Types.hpp. */
-MPP_DEFINE_TYPE_CHECKER(is_range_v, Range);
 MPP_DEFINE_TYPE_CHECKER(is_str_v, str_holder);
 MPP_DEFINE_TYPE_CHECKER(is_bin_v, bin_holder);
 MPP_DEFINE_TYPE_CHECKER(is_arr_v, arr_holder);
@@ -114,20 +113,39 @@ MPP_DEFINE_TYPE_CHECKER(is_tuple_v, std::tuple);
 MPP_DEFINE_TYPE_CHECKER(is_variant_v, std::variant);
 MPP_DEFINE_TYPE_CHECKER_TV(is_std_array_v, std::array);
 
-/** Simple helpers. */
+/** Complex type checker for Range* family */
+template <class T>
+struct is_range_v_helper : std::false_type {};
+
+template <class T1, class T2>
+struct is_range_v_helper<RangeBase<T1, T2>> : std::true_type {};
+
+template <class T1, class T2, bool B, size_t N>
+struct is_range_v_helper<IteratorRange<T1, T2, B, N>> : std::true_type {};
+
+template <class T1, class T2, bool B, size_t N>
+struct is_range_v_helper<ContiguousRange<T1, T2, B, N>> : std::true_type {};
+
+template <class T>
+constexpr bool is_range_v = is_range_v_helper<T>::value;
+
+/** Extractor of type of std::integral constant. */
 template <class T>
 struct const_value_type_helper
 {
 	using type = void;
 };
+
 template <class T, T V>
 struct const_value_type_helper<std::integral_constant<T, V>>
 {
 	using type = typename std::integral_constant<T, V>::value_type;
 };
+
 template <class T>
 using const_value_type = typename const_value_type_helper<T>::type;
 
+/** Type checkers of std::integral constant of a specific type. */
 template <class T>
 constexpr bool is_const_b =
 	is_const_v<T> && std::is_same_v<const_value_type<T>, bool>;
@@ -153,10 +171,11 @@ constexpr bool is_const_e =
  * Group checker of str, bin, arr and map.
  */
 template <class T>
-constexpr bool is_simple_spec_v = is_str_v<T> || is_bin_v<T> || is_arr_v<T> || is_map_v<T>;
+constexpr bool is_simple_spec_v =
+	is_str_v < T > || is_bin_v < T > || is_arr_v < T > || is_map_v<T>;
 
 template <class T>
-constexpr compact::Type get_simple_type()
+constexpr compact::Type get_simple_type() noexcept
 {
 	if constexpr (is_str_v<T>)
 		return compact::MP_STR;
@@ -267,15 +286,103 @@ template <class T, size_t N>
 struct has_fixed_size<T[N]> : std::true_type
 { static constexpr size_t size = N; };
 
-template <class T, size_t N>
-struct has_fixed_size<Range <T , N>> : Range<T, N>::is_fixed_size
-{ static constexpr size_t size = N; };
+template <class T1, class T2, bool IS_FIXED_SIZE, size_t N>
+struct has_fixed_size<IteratorRange<T1, T2, IS_FIXED_SIZE, N>>
+ : std::bool_constant<IS_FIXED_SIZE>
+{
+	static constexpr size_t size = N;
+};
+
+template <class T1, class T2, bool IS_FIXED_SIZE, size_t N>
+struct has_fixed_size<ContiguousRange<T1, T2, IS_FIXED_SIZE, N>>
+ : std::bool_constant<IS_FIXED_SIZE>
+{
+	static constexpr size_t size = N;
+};
 
 template <class T>
 constexpr bool has_fixed_size_v = has_fixed_size<T>::value;
 
 template <class T>
 constexpr size_t get_fixed_size_v = has_fixed_size<T>::size;
+
+/**
+ * Value getter of a container with dynamic size.
+ */
+template <class T, class _ = void>
+struct has_data_member : std::false_type {};
+
+template <class T>
+struct has_data_member<
+	T,
+	std::void_t<
+		decltype(*std::data(std::declval<T&>()))
+	>
+> : std::true_type {};
+
+template <class T>
+constexpr bool has_data_member_v = has_data_member<T>::value;
+
+template <class T>
+constexpr bool is_get_invokable_v =
+	has_fixed_size_v<T> &&
+	(has_data_member_v<T> || std::is_array_v<T> || is_tuple_v<T>);
+
+template <size_t I, class T, size_t N>
+constexpr const T& get(const T (&a)[N]) noexcept
+{
+	return a[I];
+}
+
+template <size_t I, class... T>
+const typename std::tuple_element<I, const std::tuple<T...>>::type&
+get(const std::tuple<T...>& t) noexcept
+{
+	return std::get<I>(t);
+}
+
+template <size_t I, class T>
+decltype(auto)
+get(const T& t) noexcept
+{
+	return t.data()[I];
+}
+
+/**
+ * Extractor of values from a container
+ */
+template <class T>
+struct extractor {
+	static constexpr bool is_static = false;
+	const T& t;
+	using iter_t = std::decay_t<decltype(std::begin(t))>;
+	iter_t itr;
+	extractor(const T& a) : t(a), itr(std::begin(t)) {}
+	extractor(const T& a, iter_t prev) : t(a), itr(prev) { ++itr; }
+	bool has() const { return itr != std::end(t); }
+	auto get() const { return *itr; }
+	extractor next() const { return extractor(t, itr); }
+};
+
+template <size_t I, size_t N, class T>
+struct static_extractor {
+	static constexpr bool is_static = true;
+	const T& t;
+	static_extractor(const T& a) : t(a) {}
+	static constexpr bool has() { return I != N; }
+	auto get() const { return std::get<I>(t); }
+	static_extractor<I+1, N, T> next() const { return {t}; }
+};
+
+template <class T>
+auto get_extractor(const T& t)
+{
+	if constexpr (is_get_invokable_v<T>) {
+		return static_extractor<0, get_fixed_size_v<T>, T>{t};
+	} else {
+		return extractor<T>{t};
+	}
+}
 
 /**
  * Get

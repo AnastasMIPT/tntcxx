@@ -30,6 +30,8 @@
  * SUCH DAMAGE.
  */
 
+#include "../Utils/CStr.hpp"
+
 namespace mpp {
 
 using std::integral_constant;
@@ -141,7 +143,7 @@ range(T* begin) { return {begin, begin + N}; }
  * Specificators also accept the same arguments as range(..), in that case
  * it's a synonym of as_xxx(range(...)).
  */
-#define DEFINE_ARRLIKE_WRAPPER(name)						\
+#define DEFINE_SIMPLE_WRAPPER(name)						\
 template <class T>								\
 struct name##_holder {								\
 	using type = T;								\
@@ -168,13 +170,13 @@ constexpr auto as_##name(const T&... t)						\
 										\
 struct forgot_to_add_semicolon
 
-DEFINE_ARRLIKE_WRAPPER(str);
-DEFINE_ARRLIKE_WRAPPER(bin);
-DEFINE_ARRLIKE_WRAPPER(arr);
-DEFINE_ARRLIKE_WRAPPER(map);
-DEFINE_ARRLIKE_WRAPPER(raw);
+DEFINE_SIMPLE_WRAPPER(str);
+DEFINE_SIMPLE_WRAPPER(bin);
+DEFINE_SIMPLE_WRAPPER(arr);
+DEFINE_SIMPLE_WRAPPER(map);
+DEFINE_SIMPLE_WRAPPER(raw);
 
-#undef DEFINE_ARRLIKE_WRAPPER
+#undef DEFINE_SIMPLE_WRAPPER
 
 /**
  * Specificator - as_ext(..). Creates a wrapper ext_holder that holds ext type
@@ -213,15 +215,15 @@ auto as_ext(uint8_t type, T&&... t)
  * and a range - a pair of iterators. The first iterator will be set to the
  * beginning of written msgpack object, the second - at the end of it.
 */
-template <class T, class RANGE>
+template <class T, class ITR_RANGE>
 struct track_holder {
 	using type = T;
 	const T& value;
-	RANGE& range;
+	ITR_RANGE& range;
 };
 
-template <class T, class RANGE>
-track_holder<T, RANGE> track(const T& t, RANGE& r) { return {t, r}; }
+template <class T, class ITR_RANGE>
+track_holder<T, ITR_RANGE> track(const T& t, ITR_RANGE& r) { return {t, r}; }
 
 /**
  * Reserve is an object that specifies that some number of bytes must be skipped

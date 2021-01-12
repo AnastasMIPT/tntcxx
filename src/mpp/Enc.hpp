@@ -66,6 +66,8 @@ public:
 
 	explicit Enc(Buffer_t& buf) : m_Buf(buf) {}
 
+	BUFFER& getBuf() { return m_Buf; }
+
 	template <class... T>
 	void add(const T&... t)
 	{

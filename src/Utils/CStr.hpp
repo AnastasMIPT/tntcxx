@@ -30,6 +30,7 @@
  * SUCH DAMAGE.
  */
 
+#include <cassert>
 #include <cstddef> // size_t
 #include <type_traits> // is_same_v
 #include <utility> // index_sequence
@@ -57,7 +58,7 @@ struct CStr {
 	template <size_t... I>
 	static constexpr CStr<data[I]...> subs(std::index_sequence<I...>) { return {}; }
 	/** There's no sense in referencing the object. */
-	constexpr nullptr_t operator&() const { return nullptr; }
+	constexpr nullptr_t operator&() const { assert(false); return nullptr; }
 };
 
 /**

@@ -31,6 +31,7 @@
  */
 
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <tuple>
 #include <variant>
@@ -39,6 +40,7 @@
 #include "Constants.hpp"
 #include "Types.hpp"
 #include "Traits.hpp"
+#include "../Utils/Wrappers.hpp"
 
 //TODO : add std::variant
 //TODO : add time_t?
@@ -494,7 +496,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		add_internal<compact::MP_END, false, void>(prefix.join(add), more...);
 	} else if constexpr (is_raw_v<T>) {
 		m_Buf.addBack(prefix);
-		m_Buf.addBack(std::data(t.value), std::size(t.value));
+		m_Buf.addBack(wrap::Data{std::data(t.value), std::size(t.value)});
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (is_reserve_v<T>) {
 		m_Buf.addBack(prefix);
@@ -525,7 +527,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (std::is_integral_v<T> && FIXED_SET) {
 		constexpr char tag_start = std::is_signed_v<T> ? '\xd0' : '\xcc';
-		auto add = CStr<tag_start + power_v<FIXED_TYPE>()>{};
+		auto add = CStr<tag_start + type_power_v<FIXED_TYPE>()>{};
 		m_Buf.addBack(prefix.join(add));
 		m_Buf.addBack(enc_bswap(static_cast<FIXED_TYPE>(t)));
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
@@ -548,13 +550,13 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		char c = '\xa0' + sz;
 		m_Buf.addBack(c);
 		if constexpr(is_c_str_v<T>)
-			m_Buf.addBack(t, sz);
+			m_Buf.addBack(wrap::Data{t, sz});
 		else
-			m_Buf.addBack(std::data(t), std::size(t));
+			m_Buf.addBack(wrap::Data{std::data(t), std::size(t)});
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (TYPE == compact::MP_STR && FIXED_SET) {
 		constexpr char tag_start = '\xd9';
-		auto add = CStr<tag_start + power_v<FIXED_TYPE>()>{};
+		auto add = CStr<tag_start + type_power_v<FIXED_TYPE>()>{};
 		m_Buf.addBack(prefix.join(add));
 		size_t sz;
 		if constexpr(is_c_str_v<T>)
@@ -565,7 +567,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		if constexpr(is_c_str_v<T>)
 			m_Buf.addBack(t, sz);
 		else
-			m_Buf.addBack(std::data(t), sz);
+			m_Buf.addBack(wrap::Data{std::data(t), sz});
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (TYPE == compact::MP_STR &&
 			     has_fixed_size_v<T> && !std::is_array_v<T>) {
@@ -574,16 +576,16 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		// null character which is usually not expected to be encoded.
 		auto add = conv_const_str<get_fixed_size_v<T>>();
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(std::data(t), std::size(t));
+		m_Buf.addBack(wrap::Data{std::data(t), std::size(t)});
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (TYPE == compact::MP_STR) {
 		if constexpr(is_c_str_v<T> || std::is_array_v<T>) {
 			size_t size = strlen(t);
 			add_str(prefix, size);
-			m_Buf.addBack(t, size);
+			m_Buf.addBack(wrap::Data{t, size});
 		} else {
 			add_str(prefix, t.size());
-			m_Buf.addBack(std::data(t), std::size(t));
+			m_Buf.addBack(wrap::Data{std::data(t), std::size(t)});
 		}
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 
@@ -591,7 +593,7 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 		static_assert(!std::is_same_v<FIXED_TYPE, void>,
 			      "MP_BIN doesn't have one-tag encoding!");
 		constexpr char tag_start = '\xc4';
-		auto add = CStr<tag_start + power_v<FIXED_TYPE>()>{};
+		auto add = CStr<tag_start + type_power_v<FIXED_TYPE>()>{};
 		m_Buf.addBack(prefix.join(add));
 		size_t sz;
 		if constexpr(is_c_str_v<T>)
@@ -600,24 +602,24 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 			sz = std::size(t);
 		m_Buf.addBack(enc_bswap(static_cast<FIXED_TYPE>(sz)));
 		if constexpr(is_c_str_v<T>)
-			m_Buf.addBack(t, sz);
+			m_Buf.addBack(wrap::Data{t, sz});
 		else
-			m_Buf.addBack(std::data(t), sz);
+			m_Buf.addBack(wrap::Data{std::data(t), sz});
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (TYPE == compact::MP_BIN && has_fixed_size_v<T>) {
 		auto add = conv_const_bin<get_fixed_size_v<T>>();
 		m_Buf.addBack(prefix.join(add));
-		m_Buf.addBack(std::data(t), std::size(t));
+		m_Buf.addBack(wrap::Data{std::data(t), std::size(t)});
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (TYPE == compact::MP_BIN) {
 		if constexpr(is_c_str_v<T>) {
 			static_assert(always_false_v<T>, "C string as BIN?");
 			size_t size = strlen(t);
 			add_bin(prefix, size);
-			m_Buf.addBack(t, size);
+			m_Buf.addBack(wrap::Data{t, size});
 		} else {
 			add_bin(prefix, t.size());
-			m_Buf.addBack(std::data(t), std::size(t));
+			m_Buf.addBack(wrap::Data{std::data(t), std::size(t)});
 		}
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
 	} else if constexpr (TYPE == compact::MP_ARR) {
@@ -659,10 +661,6 @@ Enc<BUFFER>::add_internal(CStr<C...> prefix, const T& t, const MORE&... more)
 				      "Wrong thing was passed as map");
 		}
 		add_internal<compact::MP_END, false, void>(CStr<>{}, more...);
-	} else if constexpr (is_raw_v<T>) {
-		static_assert(always_false_v<T>, "Not implemented!");
-	} else if constexpr (is_reserve_v<T>) {
-		static_assert(always_false_v<T>, "Not implemented!");
 	} else if constexpr (is_ext_v<T>) {
 		static_assert(always_false_v<T>, "Not implemented!");
 	} else if constexpr (looks_like_str_v<T>) {

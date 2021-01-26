@@ -30,7 +30,11 @@
  * SUCH DAMAGE.
  */
 
+#include <array>
+#include <type_traits>
+
 #include "../Utils/CStr.hpp"
+#include "Common.hpp"
 
 namespace mpp {
 
@@ -47,134 +51,106 @@ using tnt::CStr;
  * object's lifetime. The best practice is to use temporary specificator
  * objects, liks encoder.add(mpp::as_map(<that tuple>)).
  *
- * The short list of types and specificators in this header.
- * range - a set of values by two iterators, one iterator and size etc.
+ * List of type specificators in this header (only one is allowed):
  * as_str - treat a value as string.
  * as_bin - treat a value as binary data.
  * as_arr - treat a value as msgpack array.
  * as_map - treat a value as msgpack map.
  * as_ext - treat a value as msgpack ext of given type.
  * as_raw - write already packed msgpack object as raw data.
- * reserve - skip some bytes and leave some space in the stream.
+ * reserve - write nothing of given size.
+ *
+ * List of optional specificators in this header:
  * track - additionally save beginning and end positions of the written object.
  * as_fixed - fix underlying type of msgpack object.
+ *
+ * List of terminal types:
+ * sub_array - a part of an array (limited by given size).
  * MPP_AS_CONST - compile-time constant value (except strings).
  * MPP_AS_CONSTR - compile-time constant string value.
  */
 
 /**
- * Simple helper for advancing standard iterators.
+ * Dummy that declares that nothing should be encoded/decoded.
  */
-template <class ITR>
-ITR advance(ITR& itr, size_t n) { auto r = itr; std::advance(r, n); return r; }
+struct ignore {};
 
 /**
- * Range is a pair of iterators (in general meaning, pointers for example)
- * that has access methods as STL containers.
- * Should be constructed only with range(..) methods by a pair
- * of iterators or pointer and size. The size can be also passed as template
- * parameter thus declaring a range of fixed size.
- * Actual results will be one of the derivatives of Range class that will have
- * the following bool static constexpr:
- * is_fixed_size_v: the `size` method is static constexpr.
- * is_contiguous_v: the object also has standard `data` method.
+ * SubArray is C array or std::array with limited size.
  */
-template <class ITR1, class ITR2>
-struct RangeBase {
-	ITR1 m_begin;
-	ITR2 m_end;
-	ITR1 begin() const { return m_begin; }
-	const ITR2& end() const { return m_end; }
-	size_t size() const { return std::distance(m_begin, m_end); }
+template <class ARRAY, class SIZE>
+struct SubArray {
+	ARRAY m_array;
+	SIZE m_size;
+	constexpr ARRAY get() const noexcept { return m_array; }
+	constexpr SIZE size() const noexcept { return m_size; }
+	static constexpr size_t capacity = any_arr<member_t<ARRAY>>::size;
 };
 
-template <class ITR1, class ITR2, bool IS_FIXED_SIZE, size_t N>
-struct IteratorRange : RangeBase<ITR1, ITR2> {
-	static constexpr bool is_fixed_size_v = true;
-	static constexpr bool is_contiguous_v = false;
-	static constexpr size_t size() { return N; }
-};
+template <class ARRAY, class SIZE>
+constexpr auto sub_array_data(const SubArray<ARRAY, SIZE>& t) noexcept
+{
+	static_assert(any_arr<ARRAY>::is, "must be C or std array");
+	return static_cast<typename any_arr<ARRAY>::data_type*>(std::data(t.get()));
+}
 
-template <class ITR1, class ITR2>
-struct IteratorRange<ITR1, ITR2, false, 0> : RangeBase<ITR1, ITR2> {
-	static constexpr bool is_fixed_size_v = false;
-	static constexpr bool is_contiguous_v = false;
-};
-
-template <class ITR1, class ITR2, bool IS_FIXED_SIZE, size_t N>
-struct ContiguousRange : IteratorRange<ITR1, ITR2, IS_FIXED_SIZE, N> {
-	using IteratorRange<ITR1, ITR2, IS_FIXED_SIZE, N>::m_begin;
-	static constexpr bool is_contiguous_v = true;
-	auto data() const { return &*m_begin; }
-};
-
-template <class T>
-constexpr IteratorRange<const T&, const T&, false, 0>
-range(const T& begin, const T& end) { return {begin, end}; }
-
-template <class T>
-constexpr ContiguousRange<T*, T*, false, 0>
-range(T* begin, T* end) { return {begin, end}; }
-
-template <class T>
-constexpr IteratorRange<const T&, T, false, 0>
-range(const T& begin, size_t n) { return {begin, advance(begin, n)}; }
-
-template <class T>
-constexpr ContiguousRange<T*, T*, false, 0>
-range(T* begin, size_t n) { return {begin, begin + n}; }
-
-template <size_t N, class T>
-constexpr IteratorRange<const T&, T, true, N>
-range(const T& begin) { return {begin, advance(begin, N)}; }
-
-template <size_t N, class T>
-constexpr ContiguousRange<T*, T*, true, N>
-range(T* begin) { return {begin, begin + N}; }
+template <class ARRAY, class SIZE>
+constexpr auto
+sub_array(ARRAY&& arr, SIZE&& size) noexcept
+{
+	static_assert(any_arr<member_t<ARRAY>>::is, "must be C or std array");
+	check_size(size);
+	using result_t = SubArray<save_or_ref<ARRAY>, save_or_ref<SIZE>>;
+	return result_t{std::forward<ARRAY>(arr), std::forward<SIZE>(size)};
+}
 
 /**
  * A group of specificators - as_str(..), as_bin(..), as_arr(..), as_map(..),
- * as_raw(..).
- * They create wrappers str_holder, bin_holder etc respectively.
+ * as_raw(..), reserve(...).
+ * They create SimpleWrapper with appropriate properties.
  * A wrapper takes a container or a range and specify explicitly how it must
  * be packed/unpacked as msgpack object.
- * A bit outstanding is as_raw - it means that the data passed is expected
+ * A bit outstanding is 'as_raw' - it means that the data passed is expected
  * to be a valid msgpack object and must be just copied to the stream.
+ * Another outstanding wrapper is 'reserve' - it means some number of bytes
+ * must be skipped * (not written) in msgpack stream..
  * Specificators also accept the same arguments as range(..), in that case
  * it's a synonym of as_xxx(range(...)).
  */
-#define DEFINE_SIMPLE_WRAPPER(name)						\
+template <class T, class EXT_T, compact::Type TYPE, bool IS_RAW, bool IS_RESERVE>
+struct SimpleWrapper {
+	static constexpr compact::Type mp_type = TYPE;
+	static constexpr bool is_raw = IS_RAW;
+	static constexpr bool is_reserve = IS_RESERVE;
+	using type = T;
+	using ext_type_t = EXT_T;
+	T value;
+	EXT_T ext_type;
+};
+
+#define DEFINE_SIMPLE_WRAPPER(name, mp_type, is_raw, is_reserve)		\
 template <class T>								\
-struct name##_holder {								\
-	using type = T;								\
-	const T& value;								\
-};										\
-										\
-template <class... T>								\
-constexpr auto as_##name(const T&... t)						\
+constexpr auto name(T&& t) noexcept						\
 {										\
-	if constexpr (sizeof ... (T) == 1) {					\
-		return name##_holder<T...>{t...};				\
-	} else {								\
-		using range_t = decltype(range(t...));				\
-		return name##_holder<range_t>(range(t...));			\
-	}									\
+	using result_t = SimpleWrapper<save_or_ref<T>, ignore,			\
+					mp_type, is_raw, is_reserve>;		\
+	return result_t{std::forward<T>(t)};					\
 }										\
 										\
-template <size_t N, class... T>							\
-constexpr auto as_##name(const T&... t)						\
+template <class ARRAY, class SIZE>						\
+constexpr auto name(ARRAY&& arr, SIZE&& size) noexcept				\
 {										\
-	using range_t = decltype(range<N>(t...));				\
-	return name##_holder<range_t>(range<N>(t...));				\
+	return name(sub_array(std::forward<ARRAY>(arr),				\
+				   std::forward<SIZE>(size)));			\
 }										\
 										\
 struct forgot_to_add_semicolon
 
-DEFINE_SIMPLE_WRAPPER(str);
-DEFINE_SIMPLE_WRAPPER(bin);
-DEFINE_SIMPLE_WRAPPER(arr);
-DEFINE_SIMPLE_WRAPPER(map);
-DEFINE_SIMPLE_WRAPPER(raw);
+DEFINE_SIMPLE_WRAPPER(as_str, compact::MP_STR, false, false);
+DEFINE_SIMPLE_WRAPPER(as_bin, compact::MP_BIN, false, false);
+DEFINE_SIMPLE_WRAPPER(as_arr, compact::MP_ARR, false, false);
+DEFINE_SIMPLE_WRAPPER(as_map, compact::MP_MAP, false, false);
+DEFINE_SIMPLE_WRAPPER(as_raw, compact::MP_END, true, false);
 
 #undef DEFINE_SIMPLE_WRAPPER
 
@@ -185,29 +161,19 @@ DEFINE_SIMPLE_WRAPPER(raw);
  * Specificator also accepts the same arguments as range(..), in that case
  * it's a synonym of as_ext(type, range(...)).
  */
-template <class T>
-struct ext_holder {
-	using type = T;
-	uint8_t ext_type;
-	const T& value;
-};
-
-template <class... T>
-auto as_ext(uint8_t type, T&&... t)
+template <class EXT_T, class T>
+constexpr auto as_ext(EXT_T&& type, T&& t) noexcept
 {
-	if constexpr (sizeof...(T) == 1) {
-		return ext_holder<T...>{type, t...};
-	} else {
-		using range_t = decltype(range(std::forward<T>(t)...));
-		return ext_holder<range_t>{type, range(std::forward<T>(t)...)};
-	}
+	using result_t = SimpleWrapper<save_or_ref<T>, save_or_ref<EXT_T>,
+				       compact::MP_EXT, false, false>;
+	return result_t{std::forward<T>(t), std::forward<EXT_T>(type)};
 }
 
-template <size_t N, class... T>
-auto as_ext(uint8_t type, T&&... t)
+template <class EXT_T, class ARRAY, class SIZE>
+constexpr auto as_ext(EXT_T&& type, ARRAY&& arr, SIZE&& size) noexcept
 {
-	using range_t = decltype(range<N>(std::forward<T>(t)...));
-	return ext_holder<range_t>{type, range<N>(std::forward<T>(t)...)};
+	return as_ext(type, sub_array(std::forward<ARRAY>(arr),
+				      std::forward<SIZE>(size)));
 }
 
 /**
@@ -216,44 +182,39 @@ auto as_ext(uint8_t type, T&&... t)
  * beginning of written msgpack object, the second - at the end of it.
 */
 template <class T, class ITR_RANGE>
-struct track_holder {
+struct TrackWrapper {
 	using type = T;
-	const T& value;
-	ITR_RANGE& range;
+	T value;
+	ITR_RANGE range;
 };
 
 template <class T, class ITR_RANGE>
-track_holder<T, ITR_RANGE> track(const T& t, ITR_RANGE& r) { return {t, r}; }
+constexpr auto track(T&& t, ITR_RANGE&& range)
+{
+	using result_t = TrackWrapper<save_or_ref<T>, save_or_ref<ITR_RANGE>>;
+	return result_t{std::forward<T>(t), std::forward<ITR_RANGE>(range)};
+}
 
 /**
  * Reserve is an object that specifies that some number of bytes must be skipped
  * (not written) in msgpack stream.
- * Should be created by reserve<N>() and reserve(N).
- * There are also reserve<N>(range) and reserve(N, range) specificators,
- * that are synonyms for track(reserve<N>, range) and track(reserve(N), range).
+ * There is also reserve(N, range) specificator that is synonyms for
+ * track(reserve(N), range).
  */
-template <size_t N>
-struct Reserve {
-	static constexpr bool is_const_size_v = true;
-	static constexpr size_t value = N;
-};
+template <class T>
+constexpr auto reserve(T&& t) noexcept
+{
+	using result_t = SimpleWrapper<save_or_ref<T>, ignore,
+				       compact::MP_END, false, true>;
+	return result_t{std::forward<T>(t)};
+}
 
-template <>
-struct Reserve<0> {
-	static constexpr bool is_const_size_v = false;
-	size_t value;
-};
-
-template <size_t N>
-Reserve<N> reserve() { return {}; }
-
-Reserve<0> reserve(size_t n) { return {n}; }
-
-template <size_t N, class RANGE>
-track_holder<Reserve<N>, RANGE> reserve(RANGE& r) { return {{}, r}; }
-
-template <class RANGE>
-track_holder<Reserve<0>, RANGE> reserve(size_t n, RANGE& r) { return {{n}, r}; }
+template <class T, class ITR_RANGE>
+constexpr auto reserve(T&& t, ITR_RANGE&& range) noexcept
+{
+	return reserve(track(std::forward<T>(t),
+			     std::forward<ITR_RANGE>(range)));
+}
 
 /**
  * Specificator - is_fixed(..). Creates a wrapper fixed_holder that holds
@@ -267,17 +228,66 @@ track_holder<Reserve<0>, RANGE> reserve(size_t n, RANGE& r) { return {{n}, r}; }
  * The 'void' type means that a value must be one-byte packed into msgpack tag.
  */
 template <class T, class U>
-struct fixed_holder {
-	using type = T;
-	using hold_type = U;
-	const U& value;
+struct FixedWrapper {
+	using as_type = T;
+	using type = U;
+	U value;
 };
 
-template <class T, class U>
-fixed_holder<T, U> as_fixed(const U& u) { return {u}; }
+template <class U>
+constexpr auto as_fixed(U&& u) noexcept
+{
+	using T = std::remove_cv_t<std::remove_reference_t<U>>;
+	return FixedWrapper<T, save_or_ref<U>>{std::forward<U>(u)};
+}
 
-template <class T>
-fixed_holder<T, T> as_fixed(const T& t) { return {t}; }
+template <class T, class U>
+constexpr auto as_fixed(U&& u) noexcept
+{
+	return FixedWrapper<T, save_or_ref<U>>{std::forward<U>(u)};
+}
+
+/**
+ * Substitution: SubArray.
+ */
+template <class T, class ARRAY, class SIZE>
+constexpr auto subst(T&& obj, const SubArray<ARRAY, SIZE>& t) noexcept
+{
+	if constexpr (std::is_member_object_pointer_v<ARRAY>) {
+		if constexpr (std::is_member_object_pointer_v<SIZE>) {
+			return sub_array(obj.*(t.get()), obj.*(t.size()));
+		} else {
+			return sub_array(obj.*(t.get()), t.size());
+		}
+	} else {
+		if constexpr (std::is_member_object_pointer_v<SIZE>) {
+			return sub_array(t.get(), obj.*(t.size()));
+		} else {
+			return t;
+		}
+	}
+}
+
+/**
+ * Convinient wrappers for MP_ARR and MP_MAP construction.
+ */
+template<class... Types>
+constexpr auto arr(Types&&... args) noexcept
+{
+	return as_arr(std::tuple<save_or_ref<Types>...>{std::forward<Types>(args)...});
+}
+
+template<class... Types>
+constexpr auto tuple(Types&&... args) noexcept
+{
+	return as_arr(std::tuple<save_or_ref<Types>...>{std::forward<Types>(args)...});
+}
+
+template<class... Types>
+constexpr auto map(Types&&... args) noexcept
+{
+	return as_map(std::tuple<save_or_ref<Types>...>{std::forward<Types>(args)...});
+}
 
 /**
  * Constants are types that have a constant value enclosed in type itself,

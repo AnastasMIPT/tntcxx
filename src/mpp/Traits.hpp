@@ -40,11 +40,6 @@
 #include "Constants.hpp"
 
 namespace mpp {
-/**
- * Delayer of static_assert evaluation.
- */
-template <class>
-constexpr bool always_false_v = false;
 
 /**
  * Define a type checker @a id_name of a template class @a class_name.
@@ -95,45 +90,23 @@ template <class T> \
 constexpr bool id_name = id_name##_helper<T>::value
 
 /** Type checkers for types defined in Types.hpp. */
-MPP_DEFINE_TYPE_CHECKER(is_str_v, str_holder);
-MPP_DEFINE_TYPE_CHECKER(is_bin_v, bin_holder);
-MPP_DEFINE_TYPE_CHECKER(is_arr_v, arr_holder);
-MPP_DEFINE_TYPE_CHECKER(is_map_v, map_holder);
-MPP_DEFINE_TYPE_CHECKER(is_raw_v, raw_holder);
-MPP_DEFINE_TYPE_CHECKER_V(is_reserve_v, Reserve);
-MPP_DEFINE_TYPE_CHECKER(is_ext_v, ext_holder);
-MPP_DEFINE_TYPE_CHECKER(is_track_v, track_holder);
-MPP_DEFINE_TYPE_CHECKER(is_fixed_v, fixed_holder);
-
-MPP_DEFINE_TYPE_CHECKER_TV(is_const_v, std::integral_constant);
-MPP_DEFINE_TYPE_CHECKER_V(is_constr_v, CStr);
+MPP_DEFINE_TYPE_CHECKER(is_track_v, TrackWrapper);
+MPP_DEFINE_TYPE_CHECKER(is_fixed_v, FixedWrapper);
+MPP_DEFINE_TYPE_CHECKER(is_sub_array_v, SubArray);
 
 /** Other useful type checkers. */
 MPP_DEFINE_TYPE_CHECKER(is_tuple_v, std::tuple);
+MPP_DEFINE_TYPE_CHECKER(is_pair_v, std::pair);
 MPP_DEFINE_TYPE_CHECKER(is_variant_v, std::variant);
 MPP_DEFINE_TYPE_CHECKER_TV(is_std_array_v, std::array);
-
-/** Complex type checker for Range* family */
-template <class T>
-struct is_range_v_helper : std::false_type {};
-
-template <class T1, class T2>
-struct is_range_v_helper<RangeBase<T1, T2>> : std::true_type {};
-
-template <class T1, class T2, bool B, size_t N>
-struct is_range_v_helper<IteratorRange<T1, T2, B, N>> : std::true_type {};
-
-template <class T1, class T2, bool B, size_t N>
-struct is_range_v_helper<ContiguousRange<T1, T2, B, N>> : std::true_type {};
-
-template <class T>
-constexpr bool is_range_v = is_range_v_helper<T>::value;
+MPP_DEFINE_TYPE_CHECKER_TV(is_const_v, std::integral_constant);
+MPP_DEFINE_TYPE_CHECKER_V(is_constr_v, CStr);
 
 /** Extractor of type of std::integral constant. */
 template <class T>
 struct const_value_type_helper
 {
-	using type = void;
+	using type = T;
 };
 
 template <class T, T V>
@@ -149,30 +122,30 @@ using const_value_type = typename const_value_type_helper<T>::type;
 template <class T>
 constexpr bool is_const_b =
 	is_const_v<T> && std::is_same_v<const_value_type<T>, bool>;
-template <class T>
-constexpr bool is_const_f =
-	is_const_v<T> && std::is_same_v<const_value_type<T>, float>;
-template <class T>
-constexpr bool is_const_d =
-	is_const_v<T> && std::is_same_v<const_value_type<T>, double>;
-template <class T>
+constexpr bool is_const_i =
+	is_const_v<T> && std::is_integral_v<const_value_type<T>> && !is_const_b<T>;
 constexpr bool is_const_s =
-	is_const_v<T> && std::is_integral_v<const_value_type<T>> &&
-	std::is_signed_v<const_value_type<T>> && !is_const_b<T>;
+	is_const_i<T> && std::is_signed_v<const_value_type<T>>;
 template <class T>
 constexpr bool is_const_u =
-	is_const_v<T> && std::is_integral_v<const_value_type<T>> &&
-	std::is_unsigned_v<const_value_type<T>> && !is_const_b<T>;
+	is_const_i<T> && std::is_unsigned_v<const_value_type<T>>;
 template <class T>
 constexpr bool is_const_e =
 	is_const_v<T> && std::is_enum_v<const_value_type<T>>;
 
-/**
- * Group checker of str, bin, arr and map.
- */
-template <class T>
-constexpr bool is_simple_spec_v =
-	is_str_v < T > || is_bin_v < T > || is_arr_v < T > || is_map_v<T>;
+template <compact::Type MP_TYPE>
+struct Traits {
+	static constexpr compact::Type mp_type = MP_TYPE;
+	static constexpr bool is_ignored = false;
+	static constexpr bool is_raw = false;
+	static constexpr bool is_reserve = false;
+	static constexpr bool has_fixed_type = false;
+	using fixed_type = void;
+
+};
+
+using TraitsDefault = Traits<compact::MP_END>;
+
 
 template <class T>
 constexpr compact::Type get_simple_type() noexcept
@@ -286,25 +259,25 @@ template <class T, size_t N>
 struct has_fixed_size<T[N]> : std::true_type
 { static constexpr size_t size = N; };
 
-template <class T1, class T2, bool IS_FIXED_SIZE, size_t N>
-struct has_fixed_size<IteratorRange<T1, T2, IS_FIXED_SIZE, N>>
- : std::bool_constant<IS_FIXED_SIZE>
-{
-	static constexpr size_t size = N;
-};
-
-template <class T1, class T2, bool IS_FIXED_SIZE, size_t N>
-struct has_fixed_size<ContiguousRange<T1, T2, IS_FIXED_SIZE, N>>
- : std::bool_constant<IS_FIXED_SIZE>
-{
-	static constexpr size_t size = N;
-};
-
 template <class T>
 constexpr bool has_fixed_size_v = has_fixed_size<T>::value;
 
 template <class T>
 constexpr size_t get_fixed_size_v = has_fixed_size<T>::size;
+
+
+template <class T>
+constexpr auto unwrap_integral([[maybe_unused]] T t)
+{
+	if constexpr (std::is_integral_v<T>)
+		return t;
+	else if constexpr (std::is_enum_v<T>)
+		return t;
+	else if constexpr (is_const_v<T>)
+		return T::value;
+	else
+		static_assert(always_false_v<T>, "expected integral or integral_constant");
+}
 
 /**
  * Value getter of a container with dynamic size.
@@ -384,22 +357,25 @@ auto get_extractor(const T& t)
 	}
 }
 
-/**
- * Get
- */
-template <class T>
-constexpr size_t power_v()
+template <class T, size_t... I>
+struct unpacker { const T& value; };
+
+template <class T, size_t... I>
+auto get_unpacker(const T& t, std::index_sequence<I...>)
 {
-	if constexpr (sizeof(T) == 1)
-		return 0;
-	else if constexpr (sizeof(T) == 2)
-		return 1;
-	else if constexpr (sizeof(T) == 4)
-		return 2;
-	else if constexpr (sizeof(T) == 8)
-		return 3;
-	else
-		static_assert(always_false_v<T>, "wrong type");
+	return unpacker<T, I...>{t};
+}
+
+template <class... T>
+auto unpack(const std::tuple<T...>& t)
+{
+	return get_unpacker(t, std::make_index_sequence<sizeof...(T)>{});
+}
+
+template <class T, size_t N>
+auto unpack(const std::array<T, N>& t)
+{
+	return get_unpacker(t, std::make_index_sequence<N>{});
 }
 
 } // namespace mpp {

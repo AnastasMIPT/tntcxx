@@ -83,6 +83,21 @@ struct UserTupleValueReader : mpp::DefaultErrorHandler {
 	UserTuple& tuple;
 };
 
+//template <class BUFFER>
+//struct UserTupleReader1 : mpp::SimpleReaderBase<BUFFER, mpp::MP_ARR> {
+//
+//	UserTupleReader1(mpp::Dec<BUFFER>& d, UserTuple& t) : dec(d), tuple(t) {}
+//
+//	void Value(const iterator_t<BUFFER>&, mpp::compact::Type, mpp::ArrValue u)
+//	{
+//		std::cout << "U = " << u.size <<std::endl;
+//		(void) u;
+//		dec.SetReader(false, UserTupleValueReader{tuple});
+//	}
+//	mpp::Dec<BUFFER>& dec;
+//	UserTuple& tuple;
+//};
+
 template <class BUFFER>
 struct UserTupleReader : mpp::SimpleReaderBase<BUFFER, mpp::MP_ARR> {
 
@@ -90,7 +105,8 @@ struct UserTupleReader : mpp::SimpleReaderBase<BUFFER, mpp::MP_ARR> {
 
 	void Value(const iterator_t<BUFFER>&, mpp::compact::Type, mpp::ArrValue u)
 	{
-		assert(u.size == 3);
+		std::cout << "U = " << u.size <<std::endl;
+		(void) u;
 		dec.SetReader(false, UserTupleValueReader{tuple});
 	}
 	mpp::Dec<BUFFER>& dec;
